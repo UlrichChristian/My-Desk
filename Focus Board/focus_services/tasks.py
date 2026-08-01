@@ -47,25 +47,91 @@ def list_unplaced_by_project(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def list_by_quadrant(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
-    """Return tasks in the matrix grouped by quadrant key."""
+_TASK_TYPES = ("adhoc", "recurring", "project")
+
+
+def resolve_task_type(row: sqlite3.Row, *, ignore_override: bool = False) -> str:
+    """Derive a task's v2 type: 'project' | 'recurring' | 'adhoc'.
+
+    Precedence: explicit type_override → has project → recurring origin → adhoc.
+    Recurring live instances are stamped type_override='recurring' at
+    instantiation (see instantiate_recurring); a bare is_recurring row also
+    resolves to recurring as a fallback.
+
+    Pass ignore_override=True to get the *natural* (derived) type, ignoring any
+    manual override — used when deciding whether an override is even needed.
+    """
+    keys = row.keys()
+    if not ignore_override:
+        override = row["type_override"] if "type_override" in keys else None
+        if override in _TASK_TYPES:
+            return override
+    if "project_id" in keys and row["project_id"]:
+        return "project"
+    # Live instances from templates stamp type_override='recurring' and
+    # source='recurring' with is_recurring=0; templates themselves are is_recurring=1.
+    if "is_recurring" in keys and row["is_recurring"]:
+        return "recurring"
+    if "source" in keys and row["source"] == "recurring":
+        return "recurring"
+    return "adhoc"
+
+
+def set_task_band(
+    conn: sqlite3.Connection, task_id: int, *, band: str, target_type: str | None = None
+) -> None:
+    """v2 lifecycle move. Bands: 'today' | 'active' | 'pipeline'.
+
+    - today    → status='in_progress' (the committed day list)
+    - active   → status='pipeline', placed=1; optional target_type sets a
+                 type_override, but only when it differs from the natural type
+                 (else the override is cleared to keep data clean)
+    - pipeline → status='pipeline', placed=0 (future / waiting)
+
+    Never mutates important/urgent — those are explicit flags in v2.
+    """
+    now = _iso_now()
+    if band == "today":
+        conn.execute(
+            "UPDATE tasks SET status='in_progress', placed=1, updated_on=? WHERE id=?",
+            (now, task_id),
+        )
+    elif band == "pipeline":
+        conn.execute(
+            "UPDATE tasks SET status='pipeline', placed=0, updated_on=? WHERE id=?",
+            (now, task_id),
+        )
+    elif band == "active":
+        sets = ["status='pipeline'", "placed=1", "updated_on=?"]
+        params: list = [now]
+        if target_type in _TASK_TYPES:
+            row = get_task(conn, task_id)
+            natural = resolve_task_type(row, ignore_override=True) if row else "adhoc"
+            sets.append("type_override=?")
+            params.append(None if target_type == natural else target_type)
+        params.append(task_id)
+        conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id=?", params)
+    else:
+        raise ValueError(f"Unknown band: {band}")
+    conn.commit()
+
+
+def list_active_by_type(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
+    """Active band (v2): placed tasks not yet started, grouped by resolved type.
+
+    Uses placed=1 and status='pipeline', bucketed by task type. Project rows are
+    ordered by project so the render can group them under project headers.
+    """
     rows = conn.execute(
         f"""{_task_select()}
            WHERE t.placed = 1 AND t.status = 'pipeline'
              {_active_filter()}
-           ORDER BY t.sort_order, t.id""",
+           ORDER BY t.project_id, t.sort_order, t.id""",
     ).fetchall()
-    quadrants: dict[str, list] = {"do": [], "sched": [], "del": [], "later": []}
+    groups: dict[str, list] = {t: [] for t in _TASK_TYPES}
     for row in rows:
-        if row["important"] and row["urgent"]:
-            quadrants["do"].append(row)
-        elif row["important"] and not row["urgent"]:
-            quadrants["sched"].append(row)
-        elif not row["important"] and row["urgent"]:
-            quadrants["del"].append(row)
-        else:
-            quadrants["later"].append(row)
-    return quadrants
+        groups[resolve_task_type(row)].append(row)
+    return groups
 
 
 def list_in_progress(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -277,6 +343,16 @@ def get_task_detail(conn: sqlite3.Connection, task_id: int) -> sqlite3.Row | Non
 def get_subtasks(conn: sqlite3.Connection, parent_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM tasks WHERE parent_id = ? ORDER BY sort_order, id",
+        (parent_id,),
+    ).fetchall()
+
+
+def list_child_tasks(conn: sqlite3.Connection, parent_id: int) -> list[sqlite3.Row]:
+    """Direct children of a parent with the standard board enrichment joins."""
+    return conn.execute(
+        f"""{_task_select()}
+           WHERE t.parent_id = ? AND t.status != 'archived'
+           ORDER BY t.sort_order, t.id""",
         (parent_id,),
     ).fetchall()
 
@@ -519,14 +595,6 @@ def reopen_task(
     conn.commit()
 
 
-def update_sort_order(conn: sqlite3.Connection, task_id: int, sort_order: int) -> None:
-    conn.execute(
-        "UPDATE tasks SET sort_order=?, updated_on=? WHERE id=?",
-        (sort_order, _iso_now(), task_id),
-    )
-    conn.commit()
-
-
 def reorder_tasks(conn: sqlite3.Connection, ordered_ids: list[int]) -> None:
     """Renumber sort_order by each task id's position in ordered_ids.
 
@@ -547,6 +615,7 @@ def update_task(conn: sqlite3.Connection, task_id: int, **fields) -> None:
         "title", "description", "size", "category_id", "project_id",
         "parent_id", "due_date", "important", "urgent", "is_recurring",
         "accent_color", "procrastinate", "priority_index",
+        "type_override", "waiting_on",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -575,9 +644,9 @@ def instantiate_recurring(conn: sqlite3.Connection, template_root_id: int) -> in
             """INSERT INTO tasks
                (title, description, status, important, urgent, placed, size,
                 category_id, project_id, parent_id, due_date, source,
-                is_recurring, pending_since, created_on, updated_on)
+                is_recurring, type_override, pending_since, created_on, updated_on)
                VALUES (?, ?, 'pipeline', ?, ?, ?, ?, ?, ?, ?, ?, 'recurring',
-                       0, ?, ?, ?)""",
+                       0, 'recurring', ?, ?, ?)""",
             (
                 src["title"], src["description"],
                 src["important"], src["urgent"], src["placed"], src["size"],

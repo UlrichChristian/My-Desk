@@ -2,18 +2,7 @@
    Focus Board — EA-consistent board styles
    ========================================================================== */
 
-/* ── Timer bar ──────────────────────────────────────────────────────────── */
-.prod-timer-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: #1a2530;
-  color: #fff;
-  padding: 10px 20px;
-  border-radius: var(--ea-radius);
-  margin-bottom: 12px;
-  font-size: 13px;
-}
+/* ── Timer controls ─────────────────────────────────────────────────────── */
 .timer-icon { font-size: 16px; }
 .timer-task {
   font-weight: 500;
@@ -304,45 +293,7 @@
   margin: 0;
 }
 
-/* ── Eisenhower matrix ──────────────────────────────────────────────────── */
-.matrix-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
-  padding: 12px;
-  gap: 10px;
-}
-.matrix-quadrant {
-  border: 1px solid var(--ea-border);
-  border-radius: var(--ea-radius);
-  overflow: hidden;
-}
-.quadrant-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .5px;
-}
-.q-count {
-  margin-left: auto;
-  background: rgba(255,255,255,.3);
-  border-radius: 10px;
-  padding: 1px 6px;
-  font-size: 10px;
-}
-.quadrant-list {
-  list-style: none;
-  margin: 0;
-  padding: 6px;
-  min-height: 80px;
-  max-height: calc(12 * 2.2rem);
-  overflow-y: auto;
-}
+/* ── Task tiles ─────────────────────────────────────────────────────────── */
 .task-tile {
   display: flex;
   align-items: center;
@@ -459,25 +410,7 @@
 }
 .btn-tile-edit:hover { color: var(--ea-blue); border-color: var(--ea-blue); }
 
-.quadrant-drop-hint {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 36px;
-  color: var(--ea-text-secondary);
-  font-size: 11px;
-  border: 1px dashed var(--ea-border);
-  border-radius: var(--ea-radius);
-  opacity: .5;
-  list-style: none;
-  pointer-events: none;
-}
-/* Hide hint when list has real tiles */
-.quadrant-list:has(.task-tile) .quadrant-drop-hint {
-  display: none;
-}
-
-/* ── In Progress kanban (1-3-5 rule: max 9 — 1 large, 3 med, 5 small) ─── */
+/* ── Today cards (1-3-5 effort rule) ───────────────────────────────────── */
 .kanban-row {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -587,67 +520,6 @@
 }
 .btn-done:hover { background: var(--ea-green-highlight); }
 
-/* ── Projects backlog ──────────────────────────────────────────────────── */
-.projects-backlog { padding: 8px 12px 12px; }
-.project-block {
-  border: 1px solid var(--ea-border-subtle);
-  border-radius: var(--ea-radius);
-  margin-bottom: 10px;
-  overflow: hidden;
-}
-.project-block-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--ea-surface-container);
-  font-size: 13px;
-  font-weight: 600;
-}
-.proj-count {
-  margin-left: auto;
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--ea-text-secondary);
-}
-.project-backlog-list {
-  list-style: none;
-  margin: 0;
-  padding: 4px 0;
-  min-height: 32px;
-}
-.project-backlog-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--ea-border-subtle);
-}
-.project-backlog-item:last-child { border-bottom: none; }
-.project-backlog-item:hover { background: var(--ea-blue-selected); }
-.project-backlog-empty {
-  padding: 8px 12px;
-  font-size: 11px;
-  color: var(--ea-text-secondary);
-  font-style: italic;
-  list-style: none;
-}
-.project-inline-add {
-  display: flex;
-  gap: 6px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--ea-border-subtle);
-}
-.project-add-new {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 10px 12px;
-  border-top: 1px dashed var(--ea-border);
-}
-.project-add-new .quick-add-input { flex: 1; }
-
 /* ── Recurring templates ─────────────────────────────────────────────────── */
 .recurring-list { padding: 8px 16px 14px; }
 .recurring-tree {
@@ -685,8 +557,6 @@
   padding: 2px 8px;
   border-radius: 8px;
 }
-
-/* ── Legacy project chips (unused) ─────────────────────────────────────── */
 
 /* ── Recently Completed ─────────────────────────────────────────────────── */
 .completed-list {
@@ -1084,7 +954,6 @@ textarea.form-input {
 }
 
 @media (max-width: 640px) {
-  .matrix-grid { grid-template-columns: 1fr; }
   .form-row { grid-template-columns: 1fr; }
   .prod-toolbar { flex-direction: column; }
   .prod-search { max-width: 100%; }

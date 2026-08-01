@@ -74,7 +74,7 @@ a:hover { color: var(--ea-text-link-hover); }
   letter-spacing: .1px;
 }
 .brand:hover { color: var(--ea-text-primary); }
-.brand img { display: block; height: 26px; width: auto; }
+.brand img { display: block; height: 20.5px; width: auto; }
 
 .topbar-user-area {
   margin-left: auto;

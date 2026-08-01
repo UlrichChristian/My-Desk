@@ -36,6 +36,35 @@ def add_project(conn: sqlite3.Connection, *, name: str, description: str | None 
     return get_project(conn, cur.lastrowid)
 
 
+def _clamp_completion_pct(value: int | None) -> int:
+    if value is None:
+        return 0
+    return max(0, min(100, int(value)))
+
+
+def update_project(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    name: str,
+    description: str | None = None,
+    status: str = "active",
+    completion_pct: int | None = 0,
+) -> sqlite3.Row | None:
+    """Update editable project information."""
+    if status not in ("active", "archived"):
+        raise ValueError("status must be 'active' or 'archived'")
+    pct = _clamp_completion_pct(completion_pct)
+    conn.execute(
+        """UPDATE projects
+           SET name=?, description=?, status=?, completion_pct=?
+           WHERE id=?""",
+        (name, description, status, pct, project_id),
+    )
+    conn.commit()
+    return get_project(conn, project_id)
+
+
 def reorder_projects(conn: sqlite3.Connection, ordered_ids: list[int]) -> None:
     """Assign sort_order by the position of each project id in ordered_ids."""
     now = _iso_now()

@@ -8,6 +8,7 @@
 
 # Live databases & runtime data (not source — back these up separately)
 *.db
+*.db.bak*
 *.db-journal
 *.db-wal
 *.db-shm

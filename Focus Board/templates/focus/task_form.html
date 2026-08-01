@@ -167,6 +167,43 @@
       <div class="form-row">
         <div class="form-group">
           <label class="flag-chip form-flag">
+            <input type="checkbox" name="important"
+              {% if task and task.get('important') %}checked{% endif %}>
+            Important ★
+          </label>
+        </div>
+        <div class="form-group">
+          <label class="flag-chip form-flag">
+            <input type="checkbox" name="urgent"
+              {% if task and task.get('urgent') %}checked{% endif %}>
+            Urgent 🔥
+          </label>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="type_override">Type override</label>
+          <select id="type_override" name="type_override" class="form-select">
+            <option value="" {% if not task or not task.get('type_override') %}selected{% endif %}>— derive automatically —</option>
+            <option value="adhoc" {% if task and task.get('type_override') == 'adhoc' %}selected{% endif %}>To-do</option>
+            <option value="recurring" {% if task and task.get('type_override') == 'recurring' %}selected{% endif %}>Recurring</option>
+            <option value="project" {% if task and task.get('type_override') == 'project' %}selected{% endif %}>Project</option>
+          </select>
+          <p class="form-hint">Leave blank to derive from project / recurring origin.</p>
+        </div>
+        <div class="form-group">
+          <label for="waiting_on">Waiting on</label>
+          <input type="text" id="waiting_on" name="waiting_on" class="form-input"
+                 placeholder="e.g. client reply, broker docs"
+                 value="{{ task['waiting_on'] if task and task.get('waiting_on') else '' }}">
+          <p class="form-hint">Shown as a chip on Pipeline items.</p>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="flag-chip form-flag">
             <input type="checkbox" name="is_recurring"
               {% if task and task['is_recurring'] %}checked{% endif %}>
             Recurring template

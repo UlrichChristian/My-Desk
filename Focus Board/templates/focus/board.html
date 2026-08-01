@@ -3,9 +3,11 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('focus.static', filename='focus/focus.css') }}">
+<link rel="stylesheet" href="{{ url_for('focus.static', filename='focus/focus_v2.css') }}">
 {% endblock %}
 
 {% block content %}
+<div class="focus-v2">
 
 {% macro task_frame_class(task) -%}
 {%- if task.get('has_accent') %} has-accent frame-{{ task.get('frame_style', 'subtle') }}{% endif -%}
@@ -13,13 +15,12 @@
 {%- endmacro %}
 
 {% macro task_frame_style(task, extra='') -%}
-{%- if task.get('accent') %}--accent: {{ task['accent'] }}; {% endif -%}{{ extra }}
+{%- if task.get('accent') %}--accent: {{ task['accent'] }}; {% endif -%}--q-color: {{ task.get('accent') or '#c7ccd2' }}; {{ extra }}
 {%- endmacro %}
 
 {% macro procrastinate_toggle(task) -%}
 <form method="post" action="{{ url_for('focus.toggle_procrastinate', task_id=task['id']) }}" class="proc-toggle-form">
-  <button type="submit" class="btn-procrastinate{% if task.get('procrastinate') %} active{% endif %}"
-          title="Toggle procrastination marker">⏳</button>
+  <button type="submit" class="btn-procrastinate{% if task.get('procrastinate') %} active{% endif %}" title="Toggle procrastination marker">⏳</button>
 </form>
 {%- endmacro %}
 
@@ -29,404 +30,380 @@
 {% endif %}
 {%- endmacro %}
 
-{# ── Timer bar ──────────────────────────────────────────────────────────── #}
-{% if active_timer %}
-<div class="prod-timer-bar">
-  <span class="timer-icon">⏱</span>
-  <span class="timer-task">{{ active_timer['task_title'] }}</span>
-  <span class="timer-elapsed"
-        id="timer-elapsed"
-        data-started-at="{{ active_timer['started_at'] }}"></span>
-  <button type="button"
-          class="btn-timer-stop"
-          data-task-id="{{ active_timer['task_id'] }}"
-          data-task-title="{{ active_timer['task_title']|e }}"
-          onclick="openStopTimerModal(this)">&#9632; Stop</button>
-</div>
-{% endif %}
+{% macro markers(task) -%}
+{%- if task.get('important') %}<span class="mk mk-important" title="Important">★</span>{% endif -%}
+{%- if task.get('urgent') %}<span class="mk mk-urgent" title="Urgent">🔥</span>{% endif -%}
+{%- endmacro %}
 
-{# ── Toolbar: search + quick-add ────────────────────────────────────────── #}
-<div class="prod-toolbar">
-  <input type="text" id="task-search" placeholder="Search tasks…" class="prod-search" autocomplete="off">
-  <a href="{{ url_for('focus.categories') }}" class="toolbar-link">Categories</a>
-</div>
+{% macro effort_chip(task) -%}
+<span class="chip chip-effort effort-{{ task.get('size', 'medium') }} tile-chip" title="Effort">{{ task.get('effort_label', 'Med') }}</span>
+{%- endmacro %}
 
-<form method="post" action="{{ url_for('focus.add_task') }}" class="prod-quick-add" id="quick-add-form">
-  <div class="quick-add-row">
-    <input type="text" name="title" placeholder="New task name…" required autocomplete="off" class="quick-add-input">
-    <button type="submit" class="btn-primary">+ Add</button>
+{% macro cat_dot(task) -%}
+{%- if task.get('accent') %}<span class="cat-dot" style="background:{{ task['accent'] }}" title="{{ task.get('category_name') or 'Category' }}"></span>{% endif -%}
+{%- endmacro %}
+
+{% macro type_tag(task) -%}
+{%- set t = task.get('task_type') or 'adhoc' -%}
+{%- if t == 'project' %}<span class="chip tile-chip chip-type-project">▤ {{ task.get('project_name') or 'Project' }}</span>
+{%- elif t == 'recurring' %}<span class="chip tile-chip chip-type-recurring">↻ Recurring</span>
+{%- else %}<span class="chip tile-chip chip-type-adhoc">To-do</span>{%- endif -%}
+{%- endmacro %}
+
+{# ── Compact top bar: timer, search, one add action ───────────────────────── #}
+<div class="v2-topbar{% if active_timer %} running{% endif %}">
+  <div class="v2-top-timer">
+  {% if active_timer %}
+  <span class="v2-timer-clock" id="timer-elapsed" data-started-at="{{ active_timer['started_at'] }}">00:00:00</span>
+  <div class="v2-timer-info"><span class="v2-timer-task">{{ active_timer['task_title'] }}</span></div>
+  <button type="button" class="btn-timer-stop" data-task-id="{{ active_timer['task_id'] }}" data-task-title="{{ active_timer['task_title']|e }}" onclick="openStopTimerModal(this)">&#9632; Stop</button>
+  {% else %}
+  <span class="v2-timer-clock">00:00:00</span>
+  <span class="v2-timer-none">No active timer</span>
+  {% endif %}
   </div>
-  <div class="quick-add-row quick-add-controls">
-    <select name="parent_category_id" id="qa-parent-cat" class="quick-select">
-      <option value="">Category…</option>
-      {% for cat in parent_categories %}
-      <option value="{{ cat['id'] }}">{{ cat['name'] }}</option>
-      {% endfor %}
-      <option value="__new__">➕ New category…</option>
-    </select>
-    <input type="text" name="new_category" id="qa-new-cat" placeholder="New category name…"
-           class="quick-add-input qa-new-cat" style="display:none">
+  <input type="text" id="task-search" placeholder="Search tasks…" class="prod-search v2-top-search" autocomplete="off">
+  <button type="button" class="btn-primary v2-open-add" onclick="openAddModal()">+ Add task</button>
+</div>
+
+{# ── Add modal: task, project, or recurring template ─────────────────────── #}
+<div id="add-task-modal" class="modal-overlay v2-add-modal" style="display:none" onclick="closeAddModal(event)">
+  <div class="modal-box v2-add-box" onclick="event.stopPropagation()">
+    <div class="v2-add-head">
+      <h2 id="v2-add-title">Add task</h2>
+      <button type="button" class="v2-modal-close" onclick="closeAddModal()" aria-label="Close">×</button>
+    </div>
+    <div class="v2-add-tabs" role="tablist">
+      <button type="button" class="v2-add-tab active" data-add-mode="task">Task</button>
+      <button type="button" class="v2-add-tab" data-add-mode="project">Project</button>
+      <button type="button" class="v2-add-tab" data-add-mode="recurring">Recurring task</button>
+    </div>
+
+<form method="post" action="{{ url_for('focus.add_task') }}" class="prod-quick-add v2-quick-add v2-add-task-form" id="quick-add-form">
+  
+  <div class="v2-quick-grid">
+    <label class="v2-quick-field v2-quick-title">
+      <span class="quick-field-label">Task</span>
+      <input type="text" name="title" placeholder="New task name…" required autocomplete="off" class="quick-add-input">
+    </label>
+    <label class="v2-quick-field v2-quick-category">
+      <span class="quick-field-label">Category</span>
+      <select name="parent_category_id" id="qa-parent-cat" class="quick-select">
+        <option value="">None</option>
+        {% for cat in parent_categories %}<option value="{{ cat['id'] }}">{{ cat['name'] }}</option>{% endfor %}
+        <option value="__new__">➕ New category…</option>
+      </select>
+    </label>
+    <input type="text" name="new_category" id="qa-new-cat" placeholder="New category name…" class="quick-add-input qa-new-cat" style="display:none">
     <span id="qa-new-cat-options" class="qa-new-cat-options" style="display:none">
       <span class="swatch-picker swatch-picker-inline">
         {% for sw in palette %}
         <label class="swatch-option" title="{{ sw['label'] }}">
-          <input type="radio" name="new_category_color" value="{{ sw['hex'] }}"
-                 {% if loop.first %}checked{% endif %}>
+          <input type="radio" name="new_category_color" value="{{ sw['hex'] }}" {% if loop.first %}checked{% endif %}>
           <span class="swatch-dot" style="background:{{ sw['hex'] }}"></span>
         </label>
         {% endfor %}
       </span>
       <select name="new_category_frame_style" class="quick-select">
-        {% for fs in frame_styles %}
-        <option value="{{ fs }}">{{ fs|capitalize }}</option>
-        {% endfor %}
+        {% for fs in frame_styles %}<option value="{{ fs }}">{{ fs|capitalize }}</option>{% endfor %}
       </select>
     </span>
-    <select name="category_id" id="qa-sub-cat" class="quick-select" disabled>
-      <option value="">Subcategory…</option>
-      {% for cat in all_categories %}
-        {% if cat['parent_id'] %}
-      <option value="{{ cat['id'] }}" data-parent="{{ cat['parent_id'] }}" hidden>{{ cat['name'] }}</option>
-        {% endif %}
-      {% endfor %}
-      <option value="__new__">➕ New subcategory…</option>
-    </select>
-    <input type="text" name="new_subcategory" id="qa-new-sub" placeholder="New subcategory name…"
-           class="quick-add-input qa-new-sub" style="display:none">
-    <label class="quick-field">
-      <span class="quick-field-label">Due date</span>
-      <input type="date" name="due_date" class="quick-date">
-    </label>
-    <label class="quick-field">
-      <span class="quick-field-label">Effort</span>
-      <select name="size" class="quick-select">
-        <option value="small">Small</option>
-        <option value="medium" selected>Med</option>
-        <option value="big">Large</option>
+    <label class="v2-quick-field v2-quick-subcategory">
+      <span class="quick-field-label">Subcategory</span>
+      <select name="category_id" id="qa-sub-cat" class="quick-select" disabled>
+        <option value="">None</option>
+        {% for cat in all_categories %}{% if cat['parent_id'] %}<option value="{{ cat['id'] }}" data-parent="{{ cat['parent_id'] }}" hidden>{{ cat['name'] }}</option>{% endif %}{% endfor %}
+        <option value="__new__">➕ New subcategory…</option>
       </select>
     </label>
-    <label class="flag-chip"><input type="checkbox" name="important"> Important</label>
-    <label class="flag-chip"><input type="checkbox" name="urgent"> Urgent</label>
-    <label class="flag-chip"><input type="checkbox" id="qa-project-toggle"> Project</label>
-    <label class="flag-chip"><input type="checkbox" id="qa-subtask-toggle"> Subtask of</label>
-    <label class="flag-chip"><input type="checkbox" name="is_recurring" id="qa-recurring-toggle"> Recurring</label>
+    <input type="text" name="new_subcategory" id="qa-new-sub" placeholder="New subcategory name…" class="quick-add-input qa-new-sub" style="display:none">
+    <label class="v2-quick-field v2-quick-due"><span class="quick-field-label">Due date</span><input type="date" name="due_date" class="quick-date"></label>
+    <label class="v2-quick-field v2-quick-effort"><span class="quick-field-label">Effort</span>
+      <select name="size" class="quick-select"><option value="small">Small</option><option value="medium" selected>Med</option><option value="big">Large</option></select>
+    </label>
+    <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Important</span><span class="v2-checkbox"><input type="checkbox" name="important"> ★</span></label>
+    <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Urgent</span><span class="v2-checkbox"><input type="checkbox" name="urgent"> 🔥</span></label>
+    <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Project</span><span class="v2-checkbox"><input type="checkbox" id="qa-project-toggle"> Yes</span></label>
+    <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Subtask</span><span class="v2-checkbox"><input type="checkbox" id="qa-subtask-toggle"> Yes</span></label>
+    <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Recurring</span><span class="v2-checkbox"><input type="checkbox" name="is_recurring" id="qa-recurring-toggle"> Yes</span></label>
+    <button type="submit" class="btn-primary v2-quick-submit">+ Add</button>
   </div>
   <p class="form-hint qa-recurring-hint" id="qa-recurring-hint" style="display:none">
-    Recurring items are templates in the <strong>Recurring</strong> section below.
-    Choose a recurring template as parent — not an active matrix task.
+    Recurring items are templates in the <strong>Recurring templates</strong> section below. Choose a recurring template as parent — not an active task.
   </p>
   <div class="quick-add-row qa-conditional" id="qa-project-row" style="display:none">
-    <select name="project_id" class="quick-select">
-      <option value="">Select project…</option>
-      {% for proj in projects %}
-      <option value="{{ proj['id'] }}">{{ proj['name'] }}</option>
-      {% endfor %}
+    <select name="project_id" class="quick-select"><option value="">Select project…</option>
+      {% for proj in projects %}<option value="{{ proj['id'] }}">{{ proj['name'] }}</option>{% endfor %}
     </select>
   </div>
   <div class="quick-add-row qa-conditional" id="qa-subtask-row" style="display:none">
-    <select name="parent_id" id="qa-parent-active" class="quick-select">
-      <option value="">Select parent task…</option>
-      {% for t in top_level_tasks %}
-      <option value="{{ t['id'] }}">{{ t['title'] }}</option>
-      {% endfor %}
+    <select name="parent_id" id="qa-parent-active" class="quick-select"><option value="">Select parent task…</option>
+      {% for t in top_level_tasks %}<option value="{{ t['id'] }}">{{ t['title'] }}</option>{% endfor %}
     </select>
   </div>
   <div class="quick-add-row qa-conditional" id="qa-recurring-subtask-row" style="display:none">
-    <select id="qa-parent-recurring" class="quick-select" disabled>
-      <option value="">Recurring template…</option>
-      {% for t in recurring_roots %}
-      <option value="{{ t['id'] }}">{{ t['title'] }}</option>
-      {% endfor %}
+    <select id="qa-parent-recurring" class="quick-select" disabled><option value="">Recurring template…</option>
+      {% for t in recurring_roots %}<option value="{{ t['id'] }}">{{ t['title'] }}</option>{% endfor %}
     </select>
   </div>
 </form>
 
-{# ── In Progress ─────────────────────────────────────────────────────────── #}
-<div class="prod-section prod-section-plain">
-  <div class="prod-section-title">
-    In Progress Today
-    <span class="effort-tally">
-      <span class="{{ 'tally-warn' if size_counts.get('big', 0) > 1 }}">
-        {{ size_counts.get('big', 0) }} large
-      </span>
-      ·
-      <span class="{{ 'tally-warn' if size_counts.get('medium', 0) > 3 }}">
-        {{ size_counts.get('medium', 0) }}/3 med
-      </span>
-      ·
-      <span class="{{ 'tally-warn' if size_counts.get('small', 0) > 5 }}">
-        {{ size_counts.get('small', 0) }}/5 small
-      </span>
-    </span>
-  </div>
-  {% if in_progress %}
-  <div class="kanban-row" id="inprogress-list">
-    {% for task in in_progress %}
-    <div class="kanban-card size-{{ task['size'] }}{{ task_frame_class(task) }}"
-         data-task-id="{{ task['id'] }}"
-         data-task-title="{{ task['title']|e }}"
-         style="{{ task_frame_style(task) }}">
-      <span class="drag-handle kanban-handle" title="Drag to quadrant">&#8286;</span>
-      {{ procrastinate_toggle(task) }}
-      <div class="kanban-title">{{ task['title'] }}</div>
-      {% if task.get('category_name') %}
-      <div class="kanban-cat">{{ task['category_name'] }}</div>
-      {% endif %}
-      {% if task.get('parent_title') %}
-      <span class="subtask-parent-chip">↳ {{ task['parent_title'] }}</span>
-      {% endif %}
-      <div class="kanban-meta">
-        <span class="effort-badge effort-{{ task['size'] }}">{{ task.get('effort_label', 'Med') }}</span>
-        {% if task.get('due_date') %}<span class="kanban-due">{{ task['due_date'] }}</span>{% endif %}
-      </div>
-      <div class="kanban-actions">
-        <form method="post"
-              action="{{ url_for('focus.start_timer', task_id=task['id']) }}"
-              style="display:inline">
-          <button type="submit" class="btn-timer-start"
-                  {% if active_timer and active_timer['task_id'] == task['id'] %}disabled{% endif %}>
-            {% if active_timer and active_timer['task_id'] == task['id'] %}
-            &#9646;&#9646; Timing
-            {% else %}
-            &#9654; Timer
-            {% endif %}
-          </button>
-        </form>
-        <div class="kanban-actions-right">
-          <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}"
-             class="btn-tile-edit btn-sm">Edit</a>
-          <button type="button"
-                  class="btn-done"
-                  data-task-id="{{ task['id'] }}"
-                  data-task-title="{{ task['title']|e }}"
-                  onclick="openDoneModal(this)">
-            Done ✓
-          </button>
-        </div>
-      </div>
+    <form method="post" action="{{ url_for('focus.add_project') }}" class="v2-add-project-form" id="v2-add-project-form" style="display:none">
+      
+      <label class="v2-modal-field">
+        <span class="quick-field-label">Project name</span>
+        <input type="text" name="name" placeholder="Name the project…" required autocomplete="off" class="quick-add-input">
+      </label>
+      <label class="v2-modal-field">
+        <span class="quick-field-label">Description</span>
+        <textarea name="description" rows="3" placeholder="What is this project for?" class="form-input"></textarea>
+      </label>
+      <button type="submit" class="btn-primary v2-modal-submit">+ Add project</button>
+    </form>
+
+    <div class="v2-add-footer">
+      <a href="{{ url_for('focus.categories') }}" class="toolbar-link">Manage categories</a>
     </div>
-    {% endfor %}
   </div>
-  {% else %}
-  <p class="empty-hint">Nothing in progress today. Start one from the matrix below.</p>
-  {% endif %}
 </div>
 
-{# ── Focus Matrix ───────────────────────────────────────────────────── #}
-<details class="prod-section" open>
-  <summary class="prod-section-title">Focus Matrix</summary>
-
-  <div class="matrix-grid">
-    {% for q_key, meta in quadrant_meta.items() %}
-    {% set q_tasks = quadrants[q_key] %}
-    <div class="matrix-quadrant" id="quadrant-{{ q_key }}">
-      <div class="quadrant-header" style="background:{{ meta['color'] }}">
-        {{ meta['label'] }}
-        {% if q_tasks %}<span class="q-count">{{ q_tasks|length }}</span>{% endif %}
-      </div>
-      <ul class="quadrant-list" data-quadrant="{{ q_key }}">
-        {% for task in q_tasks %}
-        <li class="task-tile{{ task_frame_class(task) }}"
-            data-task-id="{{ task['id'] }}"
-            data-task-title="{{ task['title']|e }}"
-            style="{{ task_frame_style(task, '--q-color:' ~ meta['color'] ~ ';') }}">
-          <span class="drag-handle" title="Drag">&#8286;</span>
-          {{ procrastinate_toggle(task) }}
-          <div class="tile-main">
-            <div class="tile-title-row">
-              <span class="tile-title">{{ task['title'] }}</span>
-              {% if task.get('subtasks_remaining', 0) > 0 %}
-              <span class="subtask-badge">↳ {{ task['subtasks_remaining'] }} left</span>
-              {% endif %}
-              {% if task.get('parent_title') %}
-              <span class="subtask-parent-chip">↳ {{ task['parent_title'] }}</span>
-              {% endif %}
-            </div>
-            {% if task.get('subtask_total', 0) > 0 %}
-            <div class="tile-progress-bar">
-              <div class="tile-progress-fill"
-                   style="width:{{ (task.get('subtask_done', 0) / task['subtask_total'] * 100)|int }}%"></div>
-            </div>
-            {% endif %}
-          </div>
-          {% if task.get('category_name') %}
-          {{ chip_cat(task) }}
-          {% endif %}
-          <span class="chip chip-effort effort-{{ task.get('size', 'medium') }} tile-chip">{{ task.get('effort_label', 'Med') }}</span>
-          {% if task.get('due_date') %}
-          <span class="chip chip-due tile-chip">{{ task['due_date'] }}</span>
-          {% endif %}
-          {% if task.get('time_badge') %}
-          <span class="time-badge time-badge-{{ task['time_badge']['type'] }}">{{ task['time_badge']['text'] }}</span>
-          {% endif %}
-          <div class="tile-actions">
-            <form method="post"
-                  action="{{ url_for('focus.update_status', task_id=task['id']) }}"
-                  style="display:inline">
-              <input type="hidden" name="status" value="in_progress">
-              <button type="submit" class="btn-start btn-sm">Start</button>
-            </form>
-            <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}"
-               class="btn-tile-edit btn-sm">Edit</a>
-            <button type="button" class="btn-sub-add btn-sm"
-                    onclick="toggleSubAdd(this, {{ task['id'] }})">+ Sub</button>
-          </div>
-          <form method="post" action="{{ url_for('focus.add_task') }}"
-                class="tile-sub-form" style="display:none">
-            <input type="hidden" name="parent_id" value="{{ task['id'] }}">
-            <input type="hidden" name="inherit_parent" value="1">
-            <input type="text" name="title" placeholder="Subtask title…" required class="quick-add-input">
-            <button type="submit" class="btn-primary btn-sm">Add</button>
-          </form>
-        </li>
-        {% endfor %}
-        <li class="quadrant-drop-hint" data-quadrant="{{ q_key }}">
-          Drop task here
-        </li>
-      </ul>
-    </div>
-    {% endfor %}
-  </div>
-</details>
-
-{# ── Pipeline ────────────────────────────────────────────────────────────── #}
-<div class="prod-section prod-section-plain">
-  <div class="prod-section-title">
-    Pipeline
-    {% if unplaced %}<span class="count-badge">{{ unplaced|length }}</span>{% endif %}
-    {% if unplaced|length > 3 %}
-    <button type="button" class="pipeline-toggle" id="pipeline-toggle">Show {{ unplaced|length - 3 }} more</button>
-    {% endif %}
-  </div>
-
-  {% if unplaced %}
-  <ul class="pipeline-list collapsed" id="pipeline-list">
-    {% for task in unplaced %}
-    <li class="pipeline-item{{ task_frame_class(task) }}"
-        data-task-id="{{ task['id'] }}"
-        data-task-title="{{ task['title']|e }}"
-        style="{{ task_frame_style(task) }}">
-      <span class="drag-handle" title="Drag to quadrant">&#8286;</span>
-      {{ procrastinate_toggle(task) }}
-      <span class="task-title">{{ task['title'] }}</span>
-      <span class="pipeline-chips">
-        {% if task['category_name'] %}
-          {{ chip_cat(task) }}
-        {% endif %}
-        <span class="chip chip-effort effort-{{ task.get('size', 'medium') }}">{{ task.get('effort_label', 'Med') }}</span>
-        {% if task['due_date'] %}
-          <span class="chip chip-due">{{ task['due_date'] }}</span>
-        {% endif %}
-        {% if task.get('parent_title') %}
-          <span class="chip chip-parent">↳ {{ task['parent_title'] }}</span>
-        {% endif %}
-      </span>
-      <span class="pipeline-actions">
-        <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}" class="link-edit">edit</a>
-      </span>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="empty-hint">All tasks placed. Add a new one above.</p>
-  {% endif %}
+{# ── TODAY ──────────────────────────────────────────────────────────────── #}
+<div class="v2-band">
+  <span>&#9654; Today</span><span class="band-sub">in progress · your committed day</span>
+  {% if today %}<span class="count-badge">{{ today|length }}</span>{% endif %}
+  <span class="effort-tally">
+    <span class="{{ 'tally-warn' if size_counts.get('big', 0) > 1 }}">{{ size_counts.get('big', 0) }} large</span> ·
+    <span class="{{ 'tally-warn' if size_counts.get('medium', 0) > 3 }}">{{ size_counts.get('medium', 0) }}/3 med</span> ·
+    <span class="{{ 'tally-warn' if size_counts.get('small', 0) > 5 }}">{{ size_counts.get('small', 0) }}/5 small</span>
+  </span>
 </div>
-
-{# ── Projects backlog ────────────────────────────────────────────────────── #}
-<details class="prod-section">
-  <summary class="prod-section-title">
-    Projects
-    <span class="section-meta">{{ project_backlogs|length }} projects · {{ projects_done }}/{{ projects_total }} tasks done</span>
-  </summary>
-  <div class="projects-backlog">
-    {% for pb in project_backlogs %}
-    <div class="project-block" data-project-id="{{ pb['project']['id'] }}">
-      <div class="project-block-header">
-        <span class="drag-handle project-drag-handle" title="Drag to reorder">&#8286;</span>
-        <span class="proj-name">{{ pb['project']['name'] }}</span>
-        <span class="proj-count">{{ pb['done'] }}/{{ pb['total'] }}</span>
-      </div>
-      <ul class="project-backlog-list" data-project-id="{{ pb['project']['id'] }}">
-        {% for task in pb['tasks'] %}
-        <li class="project-backlog-item"
-            data-task-id="{{ task['id'] }}"
-            data-task-title="{{ task['title']|e }}">
-          <span class="drag-handle" title="Drag to quadrant">&#8286;</span>
-          <span class="task-title">{{ task['title'] }}</span>
-        </li>
-        {% endfor %}
-        {% if not pb['tasks'] %}
-        <li class="project-backlog-empty">no tasks yet</li>
-        {% endif %}
-      </ul>
-      <form method="post" action="{{ url_for('focus.add_task') }}" class="project-inline-add">
-        <input type="hidden" name="project_id" value="{{ pb['project']['id'] }}">
-        <input type="text" name="title" placeholder="Add task to project…" required class="quick-add-input">
-        <button type="submit" class="btn-primary btn-sm">+ Add</button>
+<div class="today-row" id="today-list">
+  {% for task in today %}
+  <div class="kanban-card size-{{ task['size'] }}{{ task_frame_class(task) }}" data-task-id="{{ task['id'] }}" data-task-title="{{ task['title']|e }}" data-task-type="{{ task.get('task_type') or 'adhoc' }}" style="{{ task_frame_style(task) }}">
+    <span class="drag-handle kanban-handle" title="Drag">&#8286;</span>
+    <a class="kanban-title today-title" href="{{ url_for('focus.edit_task', task_id=task['id']) }}" title="Click to edit">{{ task['title'] }}</a>
+    <div class="today-play-group">
+      <form method="post" action="{{ url_for('focus.start_timer', task_id=task['id']) }}" class="today-play-form">
+        
+        <button type="submit" class="today-play" title="Start timer" aria-label="Start timer" {% if active_timer and active_timer['task_id'] == task['id'] %}disabled{% endif %}>
+          {% if active_timer and active_timer['task_id'] == task['id'] %}&#9646;&#9646;{% else %}&#9654;{% endif %}
+        </button>
       </form>
     </div>
-    {% endfor %}
-    {% if not project_backlogs %}
-    <p class="empty-hint">No projects yet — add your first below.</p>
-    {% endif %}
-    <form method="post" action="{{ url_for('focus.add_project') }}" class="project-add-new">
-      <input type="text" name="name" placeholder="New project name…" required autocomplete="off" class="quick-add-input">
-      <button type="submit" class="btn-primary btn-sm">+ New project</button>
+    <div class="today-markers">{{ markers(task) }}{{ effort_chip(task) }}</div>
+    <div class="today-control-stack">
+      <button type="button" class="today-done" title="Mark done" aria-label="Mark done" data-task-id="{{ task['id'] }}" data-task-title="{{ task['title']|e }}" onclick="openDoneModal(this)">✓</button>
+    </div>
+  </div>
+  {% endfor %}
+  {% if not today %}<p class="empty-hint">Nothing started. Drag a task up here, or hit → on an Active task.</p>{% endif %}
+</div>
+
+{# ── ACTIVE: vertical Eisenhower To-do + stacked Project/Recurring ───────── #}
+<div class="v2-band"><span>Active</span><span class="band-sub">on deck — a lean set you'll tackle soon (pull into Today)</span></div>
+<div class="active-columns">
+
+  {% macro active_tile(task, show_edit=false, todo=false) -%}
+  {%- set ttype = 'adhoc' if todo else (task.get('task_type') or 'adhoc') -%}
+  <li class="task-tile v2-atile{% if todo %} todo-task{% elif task.get('has_accent') %} has-accent frame-{{ task.get('frame_style', 'subtle') }}{% endif %}" data-task-id="{{ task['id'] }}" data-task-title="{{ task['title']|e }}" data-task-type="{{ ttype }}"{% if not todo %} style="{{ task_frame_style(task) }}"{% endif %}>
+    <form method="post" action="{{ url_for('focus.update_status', task_id=task['id']) }}" class="atile-go-form">
+      <input type="hidden" name="status" value="in_progress">
+      
+      <button type="submit" class="atile-go" title="Move to Today" aria-label="Move to Today">
+        <svg class="atile-go-icon" viewBox="0 0 16 12" aria-hidden="true" focusable="false">
+          <path d="M1.5 4.5h7V1.4L15 6l-6.5 4.6V7.5h-7z"/>
+        </svg>
+      </button>
     </form>
+    {% if not todo %}{{ cat_dot(task) }}{% endif %}
+    <a class="atile-name" href="{{ url_for('focus.edit_task', task_id=task['id']) }}" title="Click to edit">{{ task['title'] }}</a>
+    {% if todo and task.get('category_name') %}
+    <span class="atile-category">{{ cat_dot(task) }}{{ task['category_name'] }}</span>
+    {% endif %}
+    {{ effort_chip(task) }}
+    {% if task.get('important') %}<span class="mk mk-important" title="Important">★</span>{% endif %}
+    {% if task.get('urgent') %}<span class="mk mk-urgent" title="Urgent">🔥</span>{% endif %}
+    {% if task.get('subtask_total', 0) > 0 %}<span class="atile-steps" title="Subtasks">{{ task['subtask_total'] }} steps</span>{% endif %}
+    {% if task.get('due_date') %}<span class="atile-due">{{ task['due_date'] }}</span>{% endif %}
+    {% if show_edit %}
+    <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}" class="atile-more" title="Edit task" aria-label="Edit task">⋮</a>
+    {% endif %}
+  </li>
+  {%- endmacro %}
+
+  <div class="active-col active-todo">
+    <div class="active-col-head head-adhoc">To-do <span class="col-count">{{ active['adhoc']|length }}</span></div>
+    {% for section in adhoc_sections %}
+    <details class="todo-section todo-{{ section['key'] }}">
+      <summary class="todo-section-head">
+        <span>{{ section['label'] }}</span>
+        <span class="todo-section-note">{{ section['note'] }}</span>
+        <span class="todo-section-count">{{ section['tasks']|length }}</span>
+      </summary>
+      <ul class="active-list todo-quadrant-list"
+          data-type="adhoc"
+          data-quadrant="{{ section['key'] }}"
+          id="active-adhoc-{{ section['key'] }}">
+        {% for task in section['tasks'] %}{{ active_tile(task, todo=true) }}{% endfor %}
+        {% if not section['tasks'] %}<li class="col-empty">— none —</li>{% endif %}
+      </ul>
+    </details>
+    {% endfor %}
+  </div>
+
+  <div class="active-side-stack">
+    <details class="active-col side-col-collapse">
+      <summary class="active-col-head head-project">Projects <span class="col-count">{{ project_groups|length }}</span></summary>
+      <div class="side-col-body">
+        <ul class="active-list" data-type="project" id="active-project-drop" style="min-height:8px;margin-bottom:6px"></ul>
+        <div class="side-group-list" id="project-group-list">
+          {% for grp in project_groups %}
+          <details class="proj-group" data-project-id="{{ grp['project_id'] }}">
+            <summary>
+              <span class="drag-handle group-drag-handle" title="Drag to reorder">&#8286;</span>
+              <span class="proj-group-name">{{ grp['name'] }}</span>
+              <span class="proj-pct" title="Project completion">{{ grp.get('completion_pct', 0) }}%</span>
+              <a href="{{ url_for('focus.edit_project', project_id=grp['project_id']) }}" class="atile-more" title="Edit project" aria-label="Edit project" onclick="event.stopPropagation()">⋮</a>
+            </summary>
+            <ul class="active-list active-list-proj" data-type="project" data-project-id="{{ grp['project_id'] }}">
+              {% for task in grp['tasks'] %}{{ active_tile(task, show_edit=true) }}{% endfor %}
+              {% if not grp['tasks'] %}<li class="col-empty">No active tasks yet</li>{% endif %}
+            </ul>
+          </details>
+          {% endfor %}
+        </div>
+        {% if not project_groups %}<div class="col-empty">— none —</div>{% endif %}
+      </div>
+    </details>
+
+    <details class="active-col side-col-collapse">
+      <summary class="active-col-head head-recurring">Recurring <span class="col-count">{{ recurring_groups|length }}</span></summary>
+      <div class="side-col-body">
+        <ul class="active-list" data-type="recurring" id="active-recurring-drop" style="min-height:8px;margin-bottom:6px"></ul>
+        <div class="side-group-list" id="recurring-group-list">
+          {% for group in recurring_groups %}
+          <details class="proj-group recurring-group" data-task-id="{{ group['id'] }}">
+            <summary>
+              <span class="drag-handle group-drag-handle" title="Drag to reorder">&#8286;</span>
+              <span class="proj-group-name">{{ group['title'] }}</span>
+              {% if group.get('subtask_total', 0) %}
+              <span class="proj-count">{{ group.get('subtask_done', 0) }}/{{ group['subtask_total'] }}</span>
+              {% endif %}
+              <a href="{{ url_for('focus.edit_task', task_id=group['id']) }}" class="atile-more" title="Edit recurring task" aria-label="Edit recurring task" onclick="event.stopPropagation()">⋮</a>
+            </summary>
+            <ul class="active-list" data-type="recurring">
+              {% for sub in group['subtasks'] %}
+                {% if sub.get('status') == 'done' %}
+                <li class="task-tile v2-atile subtask-done" data-task-id="{{ sub['id'] }}" data-task-title="{{ sub['title']|e }}">
+                  <span class="subtask-done-mark">✓</span>
+                  <a class="atile-name" href="{{ url_for('focus.edit_task', task_id=sub['id']) }}">{{ sub['title'] }}</a>
+                </li>
+                {% else %}
+                {{ active_tile(sub, show_edit=true) }}
+                {% endif %}
+              {% endfor %}
+              {% if not group['subtasks'] %}
+              {{ active_tile(group, show_edit=true) }}
+              {% endif %}
+            </ul>
+          </details>
+          {% endfor %}
+        </div>
+        {% if not recurring_groups %}<div class="col-empty">Start a template below</div>{% endif %}
+      </div>
+    </details>
+  </div>
+
+</div>
+
+{# ── PIPELINE ────────────────────────────────────────────────────────────── #}
+<details class="prod-section">
+  <summary class="prod-section-title">Pipeline <span class="count-badge plain-count">{{ pipeline|length }}</span></summary>
+  <p class="form-hint" style="margin:0 0 10px">Future and waiting-on work — activate an item when it is ready.</p>
+  <div class="recurring-list pipeline-template-list" id="pipeline-list">
+    {% for task in pipeline %}
+    <div class="recurring-tree pipeline-item" data-task-id="{{ task['id'] }}" data-task-title="{{ task['title']|e }}" data-task-type="{{ task.get('task_type') or 'adhoc' }}">
+      <div class="recurring-root pipeline-root">
+        <span class="drag-handle" title="Drag to Active">&#8286;</span>
+        <span class="recurring-title task-title">{{ task['title'] }}</span>
+        <span class="pipeline-chips">
+          {{ cat_dot(task) }}
+          {{ markers(task) }}
+          {{ effort_chip(task) }}
+          {{ type_tag(task) }}
+          {% if task.get('due_date') %}<span class="chip chip-due">{{ task['due_date'] }}</span>{% endif %}
+          {% if task.get('waiting_on') %}<span class="chip chip-wait">waiting: {{ task['waiting_on'] }}</span>{% endif %}
+          {% if task.get('subtask_total', 0) > 0 %}<span class="chip">{{ task['subtask_total'] }} steps</span>{% endif %}
+        </span>
+        <span class="pipeline-actions">
+          <button type="button" class="btn-start btn-sm js-to-active" data-task-id="{{ task['id'] }}">Activate</button>
+          <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}" class="atile-more" title="Edit task" aria-label="Edit task">⋮</a>
+        </span>
+      </div>
+    </div>
+    {% endfor %}
+    {% if not pipeline %}<p class="empty-hint">Pipeline is empty.</p>{% endif %}
   </div>
 </details>
 
-{# ── Recurring templates ─────────────────────────────────────────────────── #}
+{# ── PROJECT MANAGEMENT ──────────────────────────────────────────────────── #}
+<details class="prod-section">
+  <summary class="prod-section-title">Projects <span class="count-badge plain-count">{{ project_management|length }}</span></summary>
+  <p class="form-hint" style="margin:0 0 10px">Manage project names, completion, descriptions, and archive status.</p>
+  <div class="recurring-list project-management-list">
+    {% for item in project_management %}
+    <div class="recurring-tree">
+      <div class="recurring-root project-management-row">
+        <span class="recurring-title">{{ item['project']['name'] }}</span>
+        {% if item['project'].get('description') %}<span class="project-management-desc">{{ item['project']['description'] }}</span>{% endif %}
+        <span class="recurring-quadrant">{{ item['done'] }}/{{ item['total'] }} done</span>
+        <span class="proj-pct" title="Project completion">{{ item['project'].get('completion_pct', 0) }}%</span>
+        <a href="{{ url_for('focus.edit_project', project_id=item['project']['id']) }}" class="atile-more" title="Edit project" aria-label="Edit project">⋮</a>
+      </div>
+    </div>
+    {% endfor %}
+    {% if not project_management %}<p class="empty-hint">No projects yet.</p>{% endif %}
+  </div>
+</details>
+
+{# ── RECURRING TEMPLATES ─────────────────────────────────────────────────── #}
 {% if recurring %}
 <details class="prod-section">
-  <summary class="prod-section-title">
-    Recurring
-    <span class="count-badge">{{ recurring|length }}</span>
-  </summary>
-  <p class="form-hint" style="margin:0 0 12px">Templates only — click <strong>Start</strong> to place this month on the matrix.</p>
+  <summary class="prod-section-title">Recurring templates <span class="count-badge plain-count">{{ recurring|length }}</span></summary>
+  <p class="form-hint" style="margin:0 0 10px">Click <strong>Start</strong> to clone this month's instance into the Active · Recurring column.</p>
   <div class="recurring-list">
     {% for tmpl in recurring %}
     <div class="recurring-tree">
       <div class="recurring-root">
-        <span class="recurring-title">{{ tmpl['root']['title'] }}</span>
-        <span class="recurring-quadrant">{{ tmpl['root']['quadrant_label'] }}</span>
-        <a href="{{ url_for('focus.edit_task', task_id=tmpl['root']['id']) }}" class="link-edit">Edit</a>
+        <span class="recurring-title">↻ {{ tmpl['root']['title'] }}</span>
+        {% if tmpl['subtasks'] %}<span class="recurring-quadrant">{{ tmpl['subtasks']|length }} steps</span>{% endif %}
+        <a href="{{ url_for('focus.edit_task', task_id=tmpl['root']['id']) }}" class="atile-more" title="Edit template" aria-label="Edit template">⋮</a>
         <form method="post" action="{{ url_for('focus.start_recurring', template_id=tmpl['root']['id']) }}" style="display:inline">
+          
           <button type="submit" class="btn-start btn-sm">Start</button>
         </form>
       </div>
-      {% for sub in tmpl['subtasks'] %}
-      <div class="recurring-sub">
-        <span class="recurring-sub-marker">↳</span>
-        <span class="recurring-title">{{ sub['title'] }}</span>
-        <span class="recurring-quadrant">{{ sub['quadrant_label'] }}</span>
-        <a href="{{ url_for('focus.edit_task', task_id=sub['id']) }}" class="link-edit">Edit</a>
-      </div>
-      {% endfor %}
     </div>
     {% endfor %}
   </div>
 </details>
 {% endif %}
 
-{# ── Recently Completed ──────────────────────────────────────────────────── #}
+{# ── RECENTLY COMPLETED ──────────────────────────────────────────────────── #}
 {% if completed %}
 <details class="prod-section">
-  <summary class="prod-section-title">Recently Completed</summary>
+  <summary class="prod-section-title">Recently completed</summary>
   <ul class="completed-list">
     {% for task in completed %}
     <li class="completed-item">
       <span class="comp-emoji">{{ task.get('enthusiasm_emoji') or '✓' }}</span>
       <span class="comp-title">{{ task['title'] }}</span>
       <span class="comp-meta">
-        {% if task.get('completed_on') %}
-          {{ task['completed_on'][:10] }}
-        {% endif %}
-        {% if task.get('total_secs') and task['total_secs'] > 0 %}
-          · {{ (task['total_secs'] // 3600) }}h {{ '%02d'|format(task['total_secs'] % 3600 // 60) }}m
-        {% endif %}
+        {% if task.get('completed_on') %}{{ task['completed_on'][:10] }}{% endif %}
+        {% if task.get('total_secs') and task['total_secs'] > 0 %} · {{ (task['total_secs'] // 3600) }}h {{ '%02d'|format(task['total_secs'] % 3600 // 60) }}m{% endif %}
       </span>
       <form method="post" action="{{ url_for('focus.reopen_task', task_id=task['id']) }}" class="comp-reopen-form">
+        
         <button type="submit" class="btn-reopen btn-sm" title="Move back to open tasks">Reopen</button>
       </form>
     </li>
@@ -435,25 +412,19 @@
 </details>
 {% endif %}
 
-{# ── Stop Timer Modal ─────────────────────────────────────────────────────── #}
+{# ── Modals ──────────────────────────────────────────────────────────────── #}
 {% if active_timer %}
 <div id="stop-timer-modal" class="modal-overlay" style="display:none" onclick="closeStopTimerModal(event)">
   <div class="modal-box" onclick="event.stopPropagation()">
     <p class="modal-question">Are you done with<br><strong id="stop-modal-task-title"></strong>?</p>
     <div class="stop-modal-actions">
       <button type="button" class="btn-mark-done" onclick="stopTimerMarkDone()">Yes, mark done</button>
-      <form method="post" action="{{ url_for('focus.stop_timer') }}">
-        <button type="submit" class="btn-stop-only">No — just stop timer</button>
-      </form>
+      <form method="post" action="{{ url_for('focus.stop_timer') }}"><button type="submit" class="btn-stop-only">No — just stop timer</button></form>
     </div>
-    <div class="modal-footer">
-      <button type="button" onclick="closeStopTimerModal()" class="btn-cancel-link">Cancel</button>
-    </div>
+    <div class="modal-footer"><button type="button" onclick="closeStopTimerModal()" class="btn-cancel-link">Cancel</button></div>
   </div>
 </div>
 {% endif %}
-
-{# ── Done Modal (enthusiasm picker) ─────────────────────────────────────── #}
 <div id="done-modal" class="modal-overlay" style="display:none" onclick="closeDoneModal(event)">
   <div class="modal-box" onclick="event.stopPropagation()">
     <p class="modal-question">How did it feel to finish<br><strong id="modal-task-title"></strong>?</p>
@@ -461,8 +432,7 @@
       <input type="hidden" name="status" value="done">
       <div class="emoji-picker">
         {% for score, emoji in enthusiasm_emoji.items() %}
-        <button type="submit" name="enthusiasm" value="{{ score }}"
-                class="emoji-btn" title="Level {{ score }}">{{ emoji }}</button>
+        <button type="submit" name="enthusiasm" value="{{ score }}" class="emoji-btn" title="Level {{ score }}">{{ emoji }}</button>
         {% endfor %}
       </div>
       <div class="modal-footer">
@@ -473,19 +443,57 @@
   </div>
 </div>
 
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script src="{{ url_for('focus.static', filename='focus/sortable.min.js') }}"></script>
 <script src="{{ url_for('focus.static', filename='focus/timer.js') }}"></script>
 <script>
-// ── Quick-add toggles ────────────────────────────────────────────────────
+// ── Add modal ──────────────────────────────────────────────────────────────
+function setAddMode(mode) {
+  const taskForm = document.getElementById('quick-add-form');
+  const projectForm = document.getElementById('v2-add-project-form');
+  const recurringToggle = document.getElementById('qa-recurring-toggle');
+  const title = document.getElementById('v2-add-title');
+  const submit = taskForm?.querySelector('.v2-quick-submit');
+  document.querySelectorAll('.v2-add-tab').forEach(function(tab) {
+    tab.classList.toggle('active', tab.dataset.addMode === mode);
+  });
+  if (taskForm) taskForm.style.display = mode === 'project' ? 'none' : '';
+  if (projectForm) projectForm.style.display = mode === 'project' ? '' : 'none';
+  if (recurringToggle && mode !== 'project') {
+    recurringToggle.checked = mode === 'recurring';
+    syncQuickAddParentPickers();
+  }
+  if (title) title.textContent = mode === 'project' ? 'Add project' : (mode === 'recurring' ? 'Add recurring task' : 'Add task');
+  if (submit) submit.textContent = mode === 'recurring' ? '+ Add recurring task' : '+ Add task';
+}
+function openAddModal(mode) {
+  const modal = document.getElementById('add-task-modal');
+  if (!modal) return;
+  setAddMode(mode || 'task');
+  modal.style.display = 'flex';
+  setTimeout(function() {
+    const form = mode === 'project' ? document.getElementById('v2-add-project-form') : document.getElementById('quick-add-form');
+    form?.querySelector('input[type="text"]')?.focus();
+  }, 0);
+}
+function closeAddModal(evt) {
+  const modal = document.getElementById('add-task-modal');
+  if (!modal || (evt && evt.target !== modal)) return;
+  modal.style.display = 'none';
+}
+document.querySelectorAll('.v2-add-tab').forEach(function(tab) {
+  tab.addEventListener('click', function() { setAddMode(this.dataset.addMode); });
+});
+
+// ── Quick-add toggles ──────────────────────────────────────────────────────
 const qaParentCat = document.getElementById('qa-parent-cat');
 const qaSubCat = document.getElementById('qa-sub-cat');
 const qaNewCat = document.getElementById('qa-new-cat');
 const qaNewCatOpts = document.getElementById('qa-new-cat-options');
 const qaNewSub = document.getElementById('qa-new-sub');
-
 function syncQuickAddCategories() {
   if (!qaParentCat) return;
   const pid = qaParentCat.value;
@@ -495,37 +503,20 @@ function syncQuickAddCategories() {
   if (qaSubCat) {
     qaSubCat.disabled = !pid;
     if (!pid || isNewParent) qaSubCat.value = '';
-    qaSubCat.querySelectorAll('option[data-parent]').forEach(function(opt) {
-      opt.hidden = isNewParent || !pid || opt.dataset.parent !== pid;
-    });
+    qaSubCat.querySelectorAll('option[data-parent]').forEach(function(opt) { opt.hidden = isNewParent || !pid || opt.dataset.parent !== pid; });
   }
-  if (qaNewSub && (!qaSubCat || qaSubCat.value !== '__new__')) {
-    qaNewSub.style.display = 'none';
-  }
+  if (qaNewSub && (!qaSubCat || qaSubCat.value !== '__new__')) qaNewSub.style.display = 'none';
 }
-
-if (qaParentCat) {
-  qaParentCat.addEventListener('change', syncQuickAddCategories);
-}
-if (qaSubCat) {
-  qaSubCat.addEventListener('change', function() {
-    if (qaNewSub) qaNewSub.style.display = this.value === '__new__' ? '' : 'none';
-  });
-}
-
+if (qaParentCat) qaParentCat.addEventListener('change', syncQuickAddCategories);
+if (qaSubCat) qaSubCat.addEventListener('change', function() { if (qaNewSub) qaNewSub.style.display = this.value === '__new__' ? '' : 'none'; });
 document.getElementById('qa-project-toggle')?.addEventListener('change', function() {
   const row = document.getElementById('qa-project-row');
   const sel = row.querySelector('select');
   row.style.display = this.checked ? '' : 'none';
   if (sel) sel.disabled = !this.checked;
 });
-document.getElementById('qa-subtask-toggle')?.addEventListener('change', function() {
-  syncQuickAddParentPickers();
-});
-document.getElementById('qa-recurring-toggle')?.addEventListener('change', function() {
-  syncQuickAddParentPickers();
-});
-
+document.getElementById('qa-subtask-toggle')?.addEventListener('change', syncQuickAddParentPickers);
+document.getElementById('qa-recurring-toggle')?.addEventListener('change', syncQuickAddParentPickers);
 function syncQuickAddParentPickers() {
   const subtaskOn = document.getElementById('qa-subtask-toggle')?.checked;
   const recurringOn = document.getElementById('qa-recurring-toggle')?.checked;
@@ -534,236 +525,207 @@ function syncQuickAddParentPickers() {
   const recurringRow = document.getElementById('qa-recurring-subtask-row');
   const activeSel = document.getElementById('qa-parent-active');
   const recurringSel = document.getElementById('qa-parent-recurring');
-
   if (hint) hint.style.display = recurringOn ? '' : 'none';
-
   if (recurringOn && subtaskOn) {
     if (activeRow) activeRow.style.display = 'none';
     if (recurringRow) recurringRow.style.display = '';
-    if (activeSel) {
-      activeSel.disabled = true;
-      activeSel.removeAttribute('name');
-    }
-    if (recurringSel) {
-      recurringSel.disabled = false;
-      recurringSel.setAttribute('name', 'parent_id');
-    }
+    if (activeSel) { activeSel.disabled = true; activeSel.removeAttribute('name'); }
+    if (recurringSel) { recurringSel.disabled = false; recurringSel.setAttribute('name', 'parent_id'); }
   } else if (subtaskOn) {
     if (activeRow) activeRow.style.display = '';
     if (recurringRow) recurringRow.style.display = 'none';
-    if (activeSel) {
-      activeSel.disabled = false;
-      activeSel.setAttribute('name', 'parent_id');
-    }
-    if (recurringSel) {
-      recurringSel.disabled = true;
-      recurringSel.removeAttribute('name');
-    }
+    if (activeSel) { activeSel.disabled = false; activeSel.setAttribute('name', 'parent_id'); }
+    if (recurringSel) { recurringSel.disabled = true; recurringSel.removeAttribute('name'); }
   } else {
     if (activeRow) activeRow.style.display = 'none';
     if (recurringRow) recurringRow.style.display = 'none';
-    if (activeSel) {
-      activeSel.disabled = true;
-      activeSel.removeAttribute('name');
-    }
-    if (recurringSel) {
-      recurringSel.disabled = true;
-      recurringSel.removeAttribute('name');
-    }
+    if (activeSel) { activeSel.disabled = true; activeSel.removeAttribute('name'); }
+    if (recurringSel) { recurringSel.disabled = true; recurringSel.removeAttribute('name'); }
   }
 }
-
 syncQuickAddParentPickers();
-// Disable hidden selects on load
-document.querySelectorAll('.qa-conditional select').forEach(function(sel) {
-  sel.disabled = sel.closest('.qa-conditional').style.display === 'none';
+document.querySelectorAll('.qa-conditional select').forEach(function(sel) { sel.disabled = sel.closest('.qa-conditional').style.display === 'none'; });
+
+// ── Keep Active lean: cap each column, "show N more" ────────────────────────
+const ACTIVE_CAP = 6;
+document.querySelectorAll('.active-col > .active-list').forEach(function(list) {
+  const tiles = [...list.children].filter(function(el) { return el.classList.contains('task-tile'); });
+  if (tiles.length <= ACTIVE_CAP) return;
+  let collapsed = true;
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'btn-sm col-more';
+  function apply() {
+    tiles.forEach(function(t, i) { t.dataset.collapsedHidden = (collapsed && i >= ACTIVE_CAP) ? '1' : ''; t.style.display = t.dataset.collapsedHidden ? 'none' : ''; });
+    btn.textContent = collapsed ? ('Show ' + (tiles.length - ACTIVE_CAP) + ' more') : 'Show less';
+  }
+  btn.addEventListener('click', function() { collapsed = !collapsed; apply(); });
+  list.after(btn); apply();
 });
 
-// ── Pipeline collapse toggle ─────────────────────────────────────────────
-const pipelineList = document.getElementById('pipeline-list');
-const pipelineToggle = document.getElementById('pipeline-toggle');
-if (pipelineToggle && pipelineList) {
-  pipelineToggle.addEventListener('click', function() {
-    const collapsed = pipelineList.classList.toggle('collapsed');
-    const hidden = pipelineList.querySelectorAll('.pipeline-item').length - 3;
-    this.textContent = collapsed ? 'Show ' + hidden + ' more' : 'Show less';
-  });
-}
+// ── Start with Active groups collapsed (ignore browser restore) ───────────
+document.querySelectorAll('.active-columns details').forEach(function(group) {
+  group.open = false;
+  delete group.dataset.searchOpened;
+});
 
-// ── Client-side search ───────────────────────────────────────────────────
+// ── Search filter ──────────────────────────────────────────────────────────
 const searchInput = document.getElementById('task-search');
 if (searchInput) {
   searchInput.addEventListener('input', function() {
     const q = this.value.toLowerCase().trim();
-    const forceExpand = q.length > 0;
-    if (pipelineList && forceExpand) {
-      pipelineList.classList.remove('collapsed');
-      if (pipelineToggle) pipelineToggle.textContent = 'Show less';
-    }
-    const searchable = document.querySelectorAll(
-      '.pipeline-item, .task-tile, .kanban-card, .project-backlog-item'
-    );
-    searchable.forEach(function(el) {
-      if (!q) { el.style.display = ''; return; }
+    document.querySelectorAll('.col-more').forEach(function(b) { b.style.display = q ? 'none' : ''; });
+    document.querySelectorAll('.task-tile, .pipeline-item, .kanban-card').forEach(function(el) {
+      if (!q) { el.style.display = el.dataset.collapsedHidden ? 'none' : ''; return; }
       const title = (el.dataset.taskTitle || '').toLowerCase();
       el.style.display = title.includes(q) ? '' : 'none';
+    });
+    document.querySelectorAll('.active-columns details').forEach(function(group) {
+      const hasMatch = q && [...group.querySelectorAll('.task-tile')].some(function(tile) {
+        return tile.style.display !== 'none';
+      });
+      if (hasMatch && !group.open) {
+        group.open = true;
+        group.dataset.searchOpened = '1';
+      } else if ((!q || !hasMatch) && group.dataset.searchOpened) {
+        group.open = false;
+        delete group.dataset.searchOpened;
+      }
     });
   });
 }
 
-// ── SortableJS — shared group config ─────────────────────────────────────
-const BOARD_GROUP = { name: 'board', pull: true, put: true };
-
-function postJson(url, data) {
-  return fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
+// ── Band moves ──────────────────────────────────────────────────────────────
+function postJson(url, data) { return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data || {}) }); }
+function moveBand(taskId, band, type, quadrant) {
+  return postJson('/focus/task/' + taskId + '/band', {
+    band: band,
+    type: type || null,
+    quadrant: quadrant || null
   });
 }
-
-// Persist the FULL order of a list so every item's sort_order is renumbered
-// (renumbering only the dragged item leaves duplicate sort_orders → order lost).
-function persistOrder(listEl, itemSelector) {
-  const order = [...listEl.querySelectorAll(itemSelector)]
-    .map(function(el) { return parseInt(el.dataset.taskId, 10); })
-    .filter(function(n) { return !isNaN(n); });
+function persistOrder(listEl) {
+  const order = [...listEl.children].map(function(el) { return parseInt(el.dataset.taskId, 10); }).filter(function(n) { return !isNaN(n); });
   return postJson('/focus/tasks/reorder', { order: order });
 }
-
-// Pipeline list (source only)
-if (pipelineList) {
-  Sortable.create(pipelineList, {
-    group: { name: 'board', pull: true, put: false },
-    animation: 150,
-    handle: '.drag-handle',
-    ghostClass: 'drag-ghost',
-    onEnd: function(evt) {
-      if (evt.to === pipelineList) {
-        persistOrder(pipelineList, '.pipeline-item');
-      }
-    }
-  });
-}
-
-// Project backlog lists (source only)
-document.querySelectorAll('.project-backlog-list').forEach(function(listEl) {
-  Sortable.create(listEl, {
-    group: { name: 'board', pull: true, put: false },
-    animation: 150,
-    handle: '.drag-handle',
-    ghostClass: 'drag-ghost',
-    filter: '.project-backlog-empty',
-  });
+document.querySelectorAll('.js-to-active').forEach(function(btn) {
+  btn.addEventListener('click', function() { moveBand(this.dataset.taskId, 'active').then(function(){ location.reload(); }); });
 });
 
-// Reorder project blocks (isolated 'projects' group; only the header handle drags)
-const projectsBacklog = document.querySelector('.projects-backlog');
-if (projectsBacklog) {
-  Sortable.create(projectsBacklog, {
-    group: 'projects',
-    draggable: '.project-block',
-    handle: '.project-drag-handle',
-    animation: 150,
-    ghostClass: 'drag-ghost',
-    onEnd: function() {
-      const order = [...projectsBacklog.querySelectorAll('.project-block')]
-        .map(function(el) { return parseInt(el.dataset.projectId, 10); });
-      postJson('/focus/projects/reorder', { order: order });
-    }
-  });
+// ── Drag & drop across bands ────────────────────────────────────────────────
+const GROUP = 'focusv2';
+function taskTypeOf(el) { return (el && el.dataset.taskType) || 'adhoc'; }
+function makeSortable(el, opts) {
+  if (!el) return;
+  Sortable.create(el, Object.assign({ group: GROUP, animation: 150, handle: '.drag-handle', ghostClass: 'drag-ghost', filter: '.empty-hint, .col-empty, .col-more' }, opts));
 }
-
-// Quadrant lists (full cross-list drag)
-document.querySelectorAll('.quadrant-list').forEach(function(listEl) {
+makeSortable(document.getElementById('today-list'), {
+  onAdd: function(evt) { moveBand(evt.item.dataset.taskId, 'today').then(function(){ location.reload(); }); },
+  onUpdate: function(evt) { persistOrder(evt.to); }
+});
+// To-do only accepts To-do tasks — Project/Recurring go to Today via → (or drag to Today)
+document.querySelectorAll('.todo-quadrant-list').forEach(function(listEl) {
   const quadrant = listEl.dataset.quadrant;
   Sortable.create(listEl, {
-    group: BOARD_GROUP,
-    animation: 150,
-    handle: '.drag-handle',
-    ghostClass: 'drag-ghost',
-    filter: '.quadrant-drop-hint',
-    onAdd: function(evt) {
-      const taskId = evt.item.dataset.taskId;
-      postJson('/focus/task/' + taskId + '/place', { quadrant: quadrant })
-        .then(function() { return persistOrder(listEl, '.task-tile'); })
-        .then(function() { location.reload(); });
+    group: {
+      name: GROUP,
+      put: function(to, from, dragEl) { return taskTypeOf(dragEl) === 'adhoc'; }
     },
-    onUpdate: function() {
-      persistOrder(listEl, '.task-tile');
-    }
+    animation: 150, ghostClass: 'drag-ghost', draggable: '.task-tile',
+    onAdd: function(evt) { moveBand(evt.item.dataset.taskId, 'active', 'adhoc', quadrant).then(function(){ location.reload(); }); },
+    onUpdate: function(evt) { persistOrder(evt.to); }
+  });
+});
+document.querySelectorAll('.active-list[data-type="recurring"]').forEach(function(listEl) {
+  Sortable.create(listEl, {
+    group: {
+      name: GROUP,
+      put: function(to, from, dragEl) { return taskTypeOf(dragEl) === 'recurring'; }
+    },
+    animation: 150, ghostClass: 'drag-ghost', draggable: '.task-tile',
+    onAdd: function(evt) { moveBand(evt.item.dataset.taskId, 'active', 'recurring').then(function(){ location.reload(); }); },
+    onUpdate: function(evt) { persistOrder(evt.to); }
+  });
+});
+document.querySelectorAll('.active-list-proj').forEach(function(listEl) {
+  Sortable.create(listEl, {
+    group: {
+      name: GROUP,
+      put: function(to, from, dragEl) { return taskTypeOf(dragEl) === 'project'; }
+    },
+    animation: 150, ghostClass: 'drag-ghost', draggable: '.task-tile',
+    onAdd: function(evt) { moveBand(evt.item.dataset.taskId, 'active', 'project').then(function(){ location.reload(); }); },
+    onUpdate: function(evt) { persistOrder(evt.to); }
+  });
+});
+makeSortable(document.getElementById('pipeline-list'), {
+  onAdd: function(evt) { moveBand(evt.item.dataset.taskId, 'pipeline').then(function(){ location.reload(); }); },
+  onUpdate: function(evt) { persistOrder(evt.to); }
+});
+// Top-of-column drop strips for Project / Recurring (still accept same type only)
+['active-project-drop', 'active-recurring-drop'].forEach(function(id) {
+  const listEl = document.getElementById(id);
+  if (!listEl) return;
+  const type = listEl.dataset.type;
+  Sortable.create(listEl, {
+    group: {
+      name: GROUP,
+      put: function(to, from, dragEl) { return taskTypeOf(dragEl) === type; }
+    },
+    animation: 150, ghostClass: 'drag-ghost', draggable: '.task-tile',
+    onAdd: function(evt) { moveBand(evt.item.dataset.taskId, 'active', type).then(function(){ location.reload(); }); }
   });
 });
 
-// In-progress list (can drag back to quadrants)
-const inProgressList = document.getElementById('inprogress-list');
-if (inProgressList) {
-  Sortable.create(inProgressList, {
-    group: { name: 'board', pull: true, put: false },
+function persistGroupOrder(listEl, url, idAttr) {
+  const order = [...listEl.children]
+    .map(function(el) { return parseInt(el.dataset[idAttr], 10); })
+    .filter(function(n) { return !isNaN(n); });
+  return postJson(url, { order: order });
+}
+function makeGroupSortable(listId, url, idAttr) {
+  const listEl = document.getElementById(listId);
+  if (!listEl) return;
+  Sortable.create(listEl, {
     animation: 150,
-    handle: '.drag-handle, .kanban-handle',
+    handle: '.group-drag-handle',
+    draggable: '.proj-group',
     ghostClass: 'drag-ghost',
-    onUpdate: function() {
-      persistOrder(inProgressList, '.kanban-card');
-    }
+    onUpdate: function(evt) { persistGroupOrder(evt.to, url, idAttr); }
   });
 }
+makeGroupSortable('project-group-list', '/focus/projects/reorder', 'projectId');
+makeGroupSortable('recurring-group-list', '/focus/tasks/reorder', 'taskId');
+document.querySelectorAll('.group-drag-handle').forEach(function(handle) {
+  handle.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); });
+});
 
-// ── Subtask inline add ───────────────────────────────────────────────────
-function toggleSubAdd(btn, taskId) {
-  const form = btn.closest('.task-tile').querySelector('.tile-sub-form');
-  form.style.display = form.style.display === 'none' ? 'flex' : 'none';
-  if (form.style.display !== 'none') {
-    form.querySelector('input[name=title]').focus();
-  }
-}
-
-// ── Stop timer modal ─────────────────────────────────────────────────────
+// ── Modals ────────────────────────────────────────────────────────────────────
 function openStopTimerModal(btn) {
-  const modal = document.getElementById('stop-timer-modal');
-  if (!modal) return;
+  const modal = document.getElementById('stop-timer-modal'); if (!modal) return;
   document.getElementById('stop-modal-task-title').textContent = btn.dataset.taskTitle;
-  modal.dataset.taskId = btn.dataset.taskId;
-  modal.dataset.taskTitle = btn.dataset.taskTitle;
+  modal.dataset.taskId = btn.dataset.taskId; modal.dataset.taskTitle = btn.dataset.taskTitle;
   modal.style.display = 'flex';
 }
-function closeStopTimerModal(evt) {
-  const modal = document.getElementById('stop-timer-modal');
-  if (!modal) return;
-  if (!evt || evt.target === modal) {
-    modal.style.display = 'none';
-  }
-}
+function closeStopTimerModal(evt) { const modal = document.getElementById('stop-timer-modal'); if (!modal) return; if (!evt || evt.target === modal) modal.style.display = 'none'; }
 function stopTimerMarkDone() {
-  const modal = document.getElementById('stop-timer-modal');
-  if (!modal) return;
-  const taskId = modal.dataset.taskId;
-  const taskTitle = modal.dataset.taskTitle;
+  const modal = document.getElementById('stop-timer-modal'); if (!modal) return;
+  const taskId = modal.dataset.taskId, taskTitle = modal.dataset.taskTitle;
   modal.style.display = 'none';
   document.getElementById('modal-task-title').textContent = taskTitle;
-  document.getElementById('done-form').action =
-    '/focus/task/' + taskId + '/status';
+  document.getElementById('done-form').action = '/focus/task/' + taskId + '/status';
   document.getElementById('done-modal').style.display = 'flex';
 }
-
-// ── Done modal ───────────────────────────────────────────────────────────
 function openDoneModal(btn) {
-  const taskId    = btn.dataset.taskId;
-  const taskTitle = btn.dataset.taskTitle;
-  document.getElementById('modal-task-title').textContent = taskTitle;
-  document.getElementById('done-form').action =
-    '/focus/task/' + taskId + '/status';
+  document.getElementById('modal-task-title').textContent = btn.dataset.taskTitle;
+  document.getElementById('done-form').action = '/focus/task/' + btn.dataset.taskId + '/status';
   document.getElementById('done-modal').style.display = 'flex';
 }
-function closeDoneModal(evt) {
-  if (!evt || evt.target === document.getElementById('done-modal')) {
-    document.getElementById('done-modal').style.display = 'none';
-  }
-}
+function closeDoneModal(evt) { if (!evt || evt.target === document.getElementById('done-modal')) document.getElementById('done-modal').style.display = 'none'; }
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     closeDoneModal();
     closeStopTimerModal();
+    closeAddModal();
   }
 });
 </script>

@@ -1,6 +1,5 @@
 """Focus Board blueprint — all routes at /focus."""
 
-import json
 from datetime import date, datetime
 
 from flask import (
@@ -11,7 +10,6 @@ from flask import (
     redirect,
     render_template,
     request,
-    session,
     url_for,
 )
 
@@ -31,13 +29,6 @@ focus_bp = Blueprint(
 )
 
 _EFFORT_LABELS = {"small": "Small", "medium": "Med", "big": "Large"}
-
-_QUADRANT_META = {
-    "do":    {"label": "Do First",  "color": "#f07c3a", "important": 1, "urgent": 1},
-    "sched": {"label": "Schedule",  "color": "#6ebe44", "important": 1, "urgent": 0},
-    "del":   {"label": "Delegate",  "color": "#1a99d6", "important": 0, "urgent": 1},
-    "later": {"label": "Later",     "color": "#9aa5ab", "important": 0, "urgent": 0},
-}
 
 _ENTHUSIASM_EMOJI = {1: "😩", 2: "😐", 3: "🙂", 4: "😄", 5: "🤩"}
 
@@ -94,16 +85,6 @@ def _effort_label(size: str | None) -> str:
     return _EFFORT_LABELS.get(size or "medium", "Med")
 
 
-def _quadrant_key(important: int, urgent: int) -> str:
-    if important and urgent:
-        return "do"
-    if important:
-        return "sched"
-    if urgent:
-        return "del"
-    return "later"
-
-
 def _enrich_task(conn, row: dict) -> dict:
     """Attach subtask counters, time badges, and accent styling to a task dict."""
     row["subtasks_remaining"] = task_svc.subtasks_remaining(conn, row["id"])
@@ -111,6 +92,7 @@ def _enrich_task(conn, row: dict) -> dict:
     row["subtask_done"] = done
     row["subtask_total"] = total
     row["effort_label"] = _effort_label(row.get("size"))
+    row["task_type"] = task_svc.resolve_task_type(row)
 
     accent, frame_style = color_svc.resolve_task_accent(row)
     row["accent"] = accent
@@ -125,6 +107,10 @@ def _enrich_task(conn, row: dict) -> dict:
             row.get("pending_since"), row.get("created_on")
         )
     return row
+
+
+def _redirect_board():
+    return redirect(url_for("focus.board"))
 
 
 def _pending_badge(pending_since: str | None, created_on: str | None) -> dict | None:
@@ -154,98 +140,211 @@ def _due_badge(due_date: str | None) -> dict | None:
     return {"type": "due", "days": delta, "text": f"due in {delta}d"}
 
 
-def _recurring_quadrant_label(task: dict) -> str:
-    if not task.get("placed"):
-        return "Pipeline"
-    return _QUADRANT_META[_quadrant_key(task["important"], task["urgent"])]["label"]
+_ACTIVE_TYPE_META = {
+    "adhoc":     {"label": "To-do",     "icon": "•"},
+    "recurring": {"label": "Recurring", "icon": "↻"},
+    "project":   {"label": "Projects",  "icon": "▤"},
+}
 
 
 @focus_bp.route("/focus")
 @login_required
 def board():
+    """Type-based board: Today · Active (To-do/Project/Recurring) · Pipeline · Completed."""
     conn = get_db()
 
-    unplaced = [_enrich_task(conn, dict(r)) for r in task_svc.list_unplaced(conn)]
-    in_progress = [_enrich_task(conn, dict(r)) for r in task_svc.list_in_progress(conn)]
-    projects = [dict(r) for r in proj_svc.list_projects(conn)]
-    parent_categories = [dict(r) for r in task_svc.list_parent_categories(conn)]
-    all_categories = [dict(r) for r in task_svc.list_categories(conn)]
-    top_level_tasks = [dict(r) for r in task_svc.list_top_level_tasks(conn)]
-    recurring_roots = [dict(r) for r in task_svc.list_recurring_roots(conn)]
-    active_timer = timer_svc.get_active_entry(conn)
-    if active_timer:
-        active_timer = dict(active_timer)
-    size_counts = task_svc.count_in_progress_by_size(conn)
+    today = [_enrich_task(conn, dict(r)) for r in task_svc.list_in_progress(conn)]
 
-    quadrants = {}
-    for q_key, q_tasks in task_svc.list_by_quadrant(conn).items():
-        quadrants[q_key] = [_enrich_task(conn, dict(t)) for t in q_tasks]
+    # Active band, grouped by resolved type
+    active = {}
+    for t_key, rows in task_svc.list_active_by_type(conn).items():
+        active[t_key] = [_enrich_task(conn, dict(r)) for r in rows]
 
-    # Project backlogs
-    backlog_rows = [_enrich_task(conn, dict(r)) for r in task_svc.list_unplaced_by_project(conn)]
-    backlog_by_proj: dict[int, list] = {}
-    for row in backlog_rows:
-        backlog_by_proj.setdefault(row["project_id"], []).append(row)
+    # To-do keeps the Eisenhower model, rendered vertically. A reached due date
+    # is promoted to Do Now without mutating its explicit flags.
+    adhoc_quadrants = {
+        "do": [],
+        "schedule": [],
+        "delegate": [],
+        "later": [],
+    }
+    today_date = date.today()
+    for row in active.get("adhoc", []):
+        due_reached = False
+        if row.get("due_date"):
+            try:
+                due_reached = date.fromisoformat(row["due_date"][:10]) <= today_date
+            except ValueError:
+                pass
+        row["due_reached"] = due_reached
+        if due_reached or (row.get("urgent") and row.get("important")):
+            quadrant = "do"
+        elif row.get("important"):
+            quadrant = "schedule"
+        elif row.get("urgent"):
+            quadrant = "delegate"
+        else:
+            quadrant = "later"
+        adhoc_quadrants[quadrant].append(row)
 
-    projects_done, projects_total = task_svc.projects_aggregate_counts(conn)
-    project_backlogs = []
-    for proj in projects:
+    adhoc_sections = [
+        {
+            "key": "do",
+            "label": "Do Now",
+            "note": "urgent + important, or due",
+            "tasks": adhoc_quadrants["do"],
+        },
+        {
+            "key": "schedule",
+            "label": "Schedule",
+            "note": "important, not urgent",
+            "tasks": adhoc_quadrants["schedule"],
+        },
+        {
+            "key": "delegate",
+            "label": "Delegate",
+            "note": "urgent, not important",
+            "tasks": adhoc_quadrants["delegate"],
+        },
+        {
+            "key": "later",
+            "label": "Later",
+            "note": "neither urgent nor important",
+            "tasks": adhoc_quadrants["later"],
+        },
+    ]
+
+    # Project column: every active project, even with zero Active tasks yet
+    project_groups: list[dict] = []
+    seen: dict = {}
+    for proj in proj_svc.list_projects(conn):
         pid = proj["id"]
-        done, total = task_svc.project_task_counts(conn, pid)
-        project_backlogs.append({
-            "project": proj,
-            "tasks": backlog_by_proj.get(pid, []),
-            "done": done,
-            "total": total,
-        })
+        seen[pid] = {
+            "project_id": pid,
+            "name": proj["name"],
+            "completion_pct": int(proj["completion_pct"] or 0),
+            "tasks": [],
+        }
+        project_groups.append(seen[pid])
+    for row in active.get("project", []):
+        pid = row.get("project_id")
+        if pid in seen:
+            seen[pid]["tasks"].append(row)
+        else:
+            # Orphaned project link — still show under a named group
+            seen[pid] = {
+                "project_id": pid,
+                "name": row.get("project_name") or "No project",
+                "completion_pct": 0,
+                "tasks": [row],
+            }
+            project_groups.append(seen[pid])
 
-    # Recurring templates
-    recurring = []
-    for tmpl in task_svc.list_recurring_templates(conn):
-        root = dict(tmpl["root"])
-        root["quadrant_label"] = _recurring_quadrant_label(root)
-        subs = []
-        for s in tmpl["subtasks"]:
-            sd = dict(s)
-            sd["quadrant_label"] = _recurring_quadrant_label(sd)
-            subs.append(sd)
-        recurring.append({"root": root, "subtasks": subs})
+    # Recurring Active groups: roots only; expand shows their subtasks
+    recurring_groups: list[dict] = []
+    for row in active.get("recurring", []):
+        if row.get("parent_id"):
+            continue
+        group = dict(row)
+        group["subtasks"] = [
+            _enrich_task(conn, dict(s))
+            for s in task_svc.list_child_tasks(conn, row["id"])
+        ]
+        recurring_groups.append(group)
+
+    # Pipeline = all not-yet-active tasks (placed=0), with or without a project
+    pipeline = [_enrich_task(conn, dict(r)) for r in task_svc.list_unplaced(conn)]
+    pipeline += [_enrich_task(conn, dict(r)) for r in task_svc.list_unplaced_by_project(conn)]
 
     completed = []
-    for t in task_svc.list_recently_completed(conn, 5):
+    for t in task_svc.list_recently_completed(conn, 8):
         row = dict(t)
         row["total_secs"] = timer_svc.total_time_on_task(conn, row["id"])
         row["enthusiasm_emoji"] = _ENTHUSIASM_EMOJI.get(row.get("enthusiasm"), "")
         completed.append(row)
 
-    elapsed = None
+    # Recurring templates (Start → clones into the Active Recurring column)
+    recurring = []
+    for tmpl in task_svc.list_recurring_templates(conn):
+        recurring.append({
+            "root": dict(tmpl["root"]),
+            "subtasks": [dict(s) for s in tmpl["subtasks"]],
+        })
+
+    active_timer = timer_svc.get_active_entry(conn)
     if active_timer:
-        elapsed = timer_svc.elapsed_seconds(active_timer["started_at"])
+        active_timer = dict(active_timer)
+    elapsed = timer_svc.elapsed_seconds(active_timer["started_at"]) if active_timer else None
+    size_counts = task_svc.count_in_progress_by_size(conn)
+
+    projects = [dict(r) for r in proj_svc.list_projects(conn)]
+    project_management = []
+    for project in projects:
+        done, total = task_svc.project_task_counts(conn, project["id"])
+        project_management.append({
+            "project": project,
+            "done": done,
+            "total": total,
+        })
+    parent_categories = [dict(r) for r in task_svc.list_parent_categories(conn)]
+    all_categories = [dict(r) for r in task_svc.list_categories(conn)]
+    top_level_tasks = [dict(r) for r in task_svc.list_top_level_tasks(conn)]
+    recurring_roots = [dict(r) for r in task_svc.list_recurring_roots(conn)]
 
     return render_template(
         "focus/board.html",
-        unplaced=unplaced,
-        quadrants=quadrants,
-        quadrant_meta=_QUADRANT_META,
-        in_progress=in_progress,
+        today=today,
+        active=active,
+        adhoc_sections=adhoc_sections,
+        active_type_meta=_ACTIVE_TYPE_META,
+        project_groups=project_groups,
+        recurring_groups=recurring_groups,
+        pipeline=pipeline,
         completed=completed,
-        projects=projects,
-        project_backlogs=project_backlogs,
-        projects_done=projects_done,
-        projects_total=projects_total,
-        parent_categories=parent_categories,
-        all_categories=all_categories,
-        top_level_tasks=top_level_tasks,
-        recurring_roots=recurring_roots,
         recurring=recurring,
         active_timer=active_timer,
         elapsed=elapsed,
         size_counts=size_counts,
+        projects=projects,
+        project_management=project_management,
+        parent_categories=parent_categories,
+        all_categories=all_categories,
+        top_level_tasks=top_level_tasks,
+        recurring_roots=recurring_roots,
         enthusiasm_emoji=_ENTHUSIASM_EMOJI,
-        effort_labels=_EFFORT_LABELS,
         palette=color_svc.PALETTE,
         frame_styles=color_svc.FRAME_STYLES,
     )
+
+
+@focus_bp.route("/focus/task/<int:task_id>/band", methods=["POST"])
+@login_required
+def set_band(task_id):
+    """Move lifecycle band; an optional To-do quadrant updates explicit flags."""
+    data = _request_json()
+    band = data.get("band")
+    if band not in ("today", "active", "pipeline"):
+        abort(400)
+    quadrant = data.get("quadrant")
+    quadrant_flags = {
+        "do": (1, 1),
+        "schedule": (1, 0),
+        "delegate": (0, 1),
+        "later": (0, 0),
+    }
+    if quadrant is not None and quadrant not in quadrant_flags:
+        abort(400)
+    conn = get_db()
+    if band == "active" and quadrant:
+        important, urgent = quadrant_flags[quadrant]
+        task_svc.update_task(
+            conn,
+            task_id,
+            important=important,
+            urgent=urgent,
+        )
+    task_svc.set_task_band(conn, task_id, band=band, target_type=data.get("type"))
+    return jsonify({"ok": True})
 
 
 @focus_bp.route("/focus/task/add", methods=["POST"])
@@ -254,7 +353,7 @@ def add_task():
     conn = get_db()
     title = (request.form.get("title") or "").strip()
     if not title:
-        return redirect(url_for("focus.board"))
+        return _redirect_board()
 
     important = _checkbox_int("important")
     urgent = _checkbox_int("urgent")
@@ -275,12 +374,9 @@ def add_task():
             if not project_id:
                 project_id = parent["project_id"]
         else:
-            placed = 1 if (important or urgent) else 0
+            placed = 0
     else:
-        placed = 1 if (important or urgent) else 0
-
-    # Project-only tasks stay unplaced in backlog
-    if project_id and not important and not urgent:
+        # Important/urgent are flags only — new tasks land in Pipeline.
         placed = 0
 
     category_id = _resolve_category_id(conn)
@@ -297,7 +393,7 @@ def add_task():
             )
     except ValueError as exc:
         flash(str(exc), "error")
-        return redirect(url_for("focus.board"))
+        return _redirect_board()
 
     task_svc.add_task(
         conn,
@@ -314,7 +410,7 @@ def add_task():
         is_recurring=is_recurring,
         source="manual",
     )
-    return redirect(url_for("focus.board"))
+    return _redirect_board()
 
 
 @focus_bp.route("/focus/project/add", methods=["POST"])
@@ -326,7 +422,46 @@ def add_project():
         proj_svc.add_project(
             conn, name=name, description=request.form.get("description") or None
         )
-    return redirect(url_for("focus.board"))
+    return _redirect_board()
+
+
+@focus_bp.route("/focus/project/<int:project_id>/edit", methods=["GET", "POST"])
+@login_required
+def edit_project(project_id):
+    conn = get_db()
+    project_row = proj_svc.get_project(conn, project_id)
+    if not project_row:
+        abort(404)
+
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            flash("Project name is required.", "error")
+        else:
+            raw_pct = (request.form.get("completion_pct") or "").strip()
+            try:
+                completion_pct = int(raw_pct) if raw_pct != "" else 0
+            except ValueError:
+                flash("Completion must be a whole number from 0 to 100.", "error")
+                completion_pct = None
+            if completion_pct is not None:
+                proj_svc.update_project(
+                    conn,
+                    project_id,
+                    name=name,
+                    description=(request.form.get("description") or "").strip() or None,
+                    status="archived" if _checkbox_int("archived") else "active",
+                    completion_pct=completion_pct,
+                )
+                return _redirect_board()
+
+    done, total = task_svc.project_task_counts(conn, project_id)
+    return render_template(
+        "focus/project_form.html",
+        project=dict(project_row),
+        done=done,
+        total=total,
+    )
 
 
 @focus_bp.route("/focus/projects/reorder", methods=["POST"])
@@ -338,21 +473,6 @@ def reorder_projects():
     if order:
         proj_svc.reorder_projects(conn, order)
     return jsonify({"ok": True})
-
-
-@focus_bp.route("/focus/task/<int:task_id>/place", methods=["POST"])
-@login_required
-def place_task(task_id):
-    conn = get_db()
-    if request.is_json:
-        quadrant = _request_json().get("quadrant", "later")
-    else:
-        quadrant = request.form.get("quadrant", "later")
-    meta = _QUADRANT_META.get(quadrant, _QUADRANT_META["later"])
-    task_svc.place_task(conn, task_id, meta["important"], meta["urgent"])
-    if request.is_json:
-        return jsonify({"ok": True})
-    return redirect(url_for("focus.board"))
 
 
 @focus_bp.route("/focus/task/<int:task_id>/status", methods=["POST"])
@@ -369,7 +489,7 @@ def update_status(task_id):
         if task and task["is_recurring"]:
             if request.is_json:
                 return jsonify({"ok": False, "error": "Cannot complete recurring template"}), 400
-            return redirect(url_for("focus.board"))
+            return _redirect_board()
         active = timer_svc.get_active_entry(conn)
         if active and active["task_id"] == task_id:
             timer_svc.stop_timer(conn)
@@ -379,7 +499,7 @@ def update_status(task_id):
         task_svc.complete_task(conn, task_id, enthusiasm)
     if request.is_json:
         return jsonify({"ok": True})
-    return redirect(url_for("focus.board"))
+    return _redirect_board()
 
 
 @focus_bp.route("/focus/task/<int:task_id>/reopen", methods=["POST"])
@@ -394,10 +514,10 @@ def reopen_task(task_id):
     except ValueError as exc:
         if request.is_json:
             return jsonify({"ok": False, "error": str(exc)}), 400
-        return redirect(url_for("focus.board"))
+        return _redirect_board()
     if request.is_json:
         return jsonify({"ok": True, "status": to_status})
-    return redirect(url_for("focus.board"))
+    return _redirect_board()
 
 
 @focus_bp.route("/focus/task/<int:task_id>/time", methods=["GET"])
@@ -476,20 +596,6 @@ def reorder_tasks():
     return jsonify({"ok": True})
 
 
-@focus_bp.route("/focus/task/<int:task_id>/order", methods=["POST"])
-@login_required
-def update_order(task_id):
-    conn = get_db()
-    data = _request_json()
-    sort_order = int(data.get("sort_order", 0))
-    quadrant = data.get("quadrant")
-    if quadrant:
-        meta = _QUADRANT_META.get(quadrant, _QUADRANT_META["later"])
-        task_svc.place_task(conn, task_id, meta["important"], meta["urgent"])
-    task_svc.update_sort_order(conn, task_id, sort_order)
-    return jsonify({"ok": True})
-
-
 @focus_bp.route("/focus/task/<int:task_id>/edit", methods=["GET", "POST"])
 @login_required
 def edit_task(task_id):
@@ -517,11 +623,19 @@ def edit_task(task_id):
             is_recurring=_checkbox_int("is_recurring"),
             accent_color=_accent_hex_from_form(),
             procrastinate=_checkbox_int("procrastinate"),
+            waiting_on=(request.form.get("waiting_on") or "").strip() or None,
+            important=_checkbox_int("important"),
+            urgent=_checkbox_int("urgent"),
         )
+        if "type_override" in request.form:
+            override = (request.form.get("type_override") or "").strip() or None
+            updates["type_override"] = (
+                override if override in ("adhoc", "recurring", "project") else None
+            )
         if not has_subtasks:
             updates["parent_id"] = _int_or_none(request.form.get("parent_id"))
         task_svc.update_task(conn, task_id, **updates)
-        return redirect(url_for("focus.board"))
+        return _redirect_board()
 
     task = dict(task_row)
     categories = task_svc.list_categories(conn)
@@ -620,7 +734,7 @@ def toggle_procrastinate(task_id):
     new_val = task_svc.toggle_procrastinate(conn, task_id)
     if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return jsonify({"ok": True, "procrastinate": bool(new_val)})
-    return redirect(url_for("focus.board"))
+    return _redirect_board()
 
 
 @focus_bp.route("/focus/recurring/<int:template_id>/start", methods=["POST"])
@@ -628,7 +742,7 @@ def toggle_procrastinate(task_id):
 def start_recurring(template_id):
     conn = get_db()
     task_svc.instantiate_recurring(conn, template_id)
-    return redirect(url_for("focus.board"))
+    return _redirect_board()
 
 
 @focus_bp.route("/focus/timer/start/<int:task_id>", methods=["POST"])
@@ -638,7 +752,7 @@ def start_timer(task_id):
     timer_svc.start_timer(conn, task_id)
     if request.is_json:
         return jsonify({"ok": True})
-    return redirect(url_for("focus.board"))
+    return _redirect_board()
 
 
 @focus_bp.route("/focus/timer/stop", methods=["POST"])
@@ -648,7 +762,7 @@ def stop_timer():
     timer_svc.stop_timer(conn)
     if request.is_json:
         return jsonify({"ok": True})
-    return redirect(url_for("focus.board"))
+    return _redirect_board()
 
 
 @focus_bp.route("/focus/timer/status")

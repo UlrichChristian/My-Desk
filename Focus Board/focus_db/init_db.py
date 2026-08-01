@@ -10,12 +10,13 @@ from focus_db.connection import DB_PATH
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL,
-    description TEXT,
-    status      TEXT DEFAULT 'active',
-    sort_order  INTEGER DEFAULT 0,
-    created_on  TEXT
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    description    TEXT,
+    status         TEXT DEFAULT 'active',
+    sort_order     INTEGER DEFAULT 0,
+    completion_pct INTEGER DEFAULT 0,
+    created_on     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -158,6 +159,10 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tasks ADD COLUMN procrastinate INTEGER DEFAULT 0")
     if "priority_index" not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN priority_index INTEGER")
+    if "type_override" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN type_override TEXT")
+    if "waiting_on" not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN waiting_on TEXT")
 
     cat_cols = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
     if "frame_style" not in cat_cols:
@@ -168,6 +173,8 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     proj_cols = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
     if "sort_order" not in proj_cols:
         conn.execute("ALTER TABLE projects ADD COLUMN sort_order INTEGER DEFAULT 0")
+    if "completion_pct" not in proj_cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN completion_pct INTEGER DEFAULT 0")
 
     _backfill_category_colors(conn)
     conn.commit()

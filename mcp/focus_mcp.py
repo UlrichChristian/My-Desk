@@ -22,6 +22,8 @@ _QUADRANT_FLAGS = {
     "later": (0, 0),
 }
 
+_TASK_TYPES = ("adhoc", "recurring", "project")
+
 _STYLE_NOTE = "focus-task-style.md"
 _CONFIRM_MSG = (
     "Show preview to the user; re-call with confirmed=True after explicit approval."
@@ -75,11 +77,18 @@ def _blocking_duplicates(candidates: list[dict]) -> list[dict]:
     return [c for c in candidates if c["exact"] and c["active"]]
 
 
-def _quadrant_for_row(row: sqlite3.Row | dict) -> str:
-    placed = bool(row["placed"])
-    if not placed:
-        return "pipeline"
-    return _quadrant_label(row["important"], row["urgent"])
+def _band_for_row(row: sqlite3.Row | dict) -> str:
+    """v2 lifecycle band: today | active | pipeline | completed | archived."""
+    status = row["status"]
+    if status == "in_progress":
+        return "today"
+    if status == "done":
+        return "completed"
+    if status == "archived":
+        return "archived"
+    if row["placed"]:
+        return "active"
+    return "pipeline"
 
 
 def _slim_task(row: sqlite3.Row | dict) -> dict:
@@ -89,15 +98,18 @@ def _slim_task(row: sqlite3.Row | dict) -> dict:
     project = row["project_name"] if "project_name" in keys else None
     parent_title = row["parent_title"] if "parent_title" in keys else None
     priority_index = row["priority_index"] if "priority_index" in keys else None
+    waiting_on = row["waiting_on"] if "waiting_on" in keys else None
     return {
         "id": row["id"],
         "title": row["title"],
         "status": row["status"],
+        "band": _band_for_row(row),
+        "type": task_svc.resolve_task_type(row),
         "urgent": bool(row["urgent"]),
         "important": bool(row["important"]),
         "placed": bool(row["placed"]),
-        "quadrant": _quadrant_for_row(row),
         "due_date": row["due_date"],
+        "waiting_on": waiting_on,
         "description": row["description"],
         "parent_id": row["parent_id"],
         "parent_title": parent_title,
@@ -115,25 +127,28 @@ def _slim_mutate(row: sqlite3.Row | dict) -> dict:
         "id": row["id"],
         "title": row["title"],
         "status": row["status"],
-        "quadrant": _quadrant_for_row(row),
+        "band": _band_for_row(row),
+        "type": task_svc.resolve_task_type(row),
     }
 
 
 def _place_task_preview(
-    task_id: int, important: bool, urgent: bool, quadrant: str
+    task_id: int, *, task_type: str | None, important: bool | None, urgent: bool | None
 ) -> dict:
     return {
         "ok": False,
         "needs_confirmation": True,
         "task_id": task_id,
+        "band": "active",
+        "task_type": task_type,
         "important": important,
         "urgent": urgent,
-        "quadrant": quadrant,
         "message": _CONFIRM_MSG,
     }
 
 
 def _quadrant_label(important: int, urgent: int) -> str:
+    """Legacy helper — kept only for recurring-template previews that still mention it."""
     return next(
         (k for k, v in _QUADRANT_FLAGS.items() if v == (important, urgent)),
         "later",
@@ -435,20 +450,27 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
 
     @mcp.tool()
     def list_active_board() -> dict:
-        """Active work snapshot: in-progress tasks plus matrix quadrants (not yet started).
+        """Active work snapshot for the v2 board bands.
 
-        One call for 'what is on the board now' — in_progress kanban items and placed
-        pipeline tasks grouped by quadrant (do / sched / del / later). Excludes
-        unplaced pipeline backlog, projects, recurring templates, done, and archived.
+        Returns today (in_progress), active (placed pipeline grouped by type:
+        adhoc / recurring / project), and pipeline (unplaced). Excludes
+        recurring templates, done, and archived.
         """
         with open_db(focus_db_path) as conn:
-            in_progress = [_slim_task(r) for r in task_svc.list_in_progress(conn)]
-            by_q = task_svc.list_by_quadrant(conn)
-            quadrants = {
+            today = [_slim_task(r) for r in task_svc.list_in_progress(conn)]
+            by_type = task_svc.list_active_by_type(conn)
+            active = {
                 key: [_slim_task(r) for r in rows]
-                for key, rows in by_q.items()
+                for key, rows in by_type.items()
             }
-            return {"in_progress": in_progress, "quadrants": quadrants}
+            pipeline = [_slim_task(r) for r in task_svc.list_unplaced(conn)]
+            pipeline += [_slim_task(r) for r in task_svc.list_unplaced_by_project(conn)]
+            return {
+                "today": today,
+                "in_progress": today,  # alias for older callers
+                "active": active,
+                "pipeline": pipeline,
+            }
 
     @mcp.tool()
     def search_tasks(query: str, limit: int = 15) -> list[dict]:
@@ -781,10 +803,18 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
         procrastinate: bool | None = None,
         important: bool | None = None,
         urgent: bool | None = None,
+        waiting_on: str | None = None,
+        type_override: str | None = None,
         parent_id: int | None = None,
         parent_title: str | None = None,
     ) -> dict:
-        """Patch a task. description is high priority for email-sweep context. confirmed=True required to write."""
+        """Patch a task. description is high priority for email-sweep context. confirmed=True required to write.
+
+        type_override ∈ adhoc|recurring|project|'' (empty string clears to derived).
+        waiting_on is a free-text label shown on Pipeline items.
+        """
+        if type_override is not None and type_override not in ("", *_TASK_TYPES):
+            raise ValueError(f"type_override must be one of {_TASK_TYPES} or ''.")
         fields = {
             k: v
             for k, v in {
@@ -799,6 +829,8 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                 "procrastinate": procrastinate,
                 "important": important,
                 "urgent": urgent,
+                "waiting_on": waiting_on,
+                "type_override": type_override,
                 "parent_id": parent_id,
                 "parent_title": parent_title,
             }.items()
@@ -837,6 +869,10 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                 updates["important"] = 1 if important else 0
             if urgent is not None:
                 updates["urgent"] = 1 if urgent else 0
+            if waiting_on is not None:
+                updates["waiting_on"] = waiting_on.strip() or None
+            if type_override is not None:
+                updates["type_override"] = type_override or None
             if category is not None:
                 if category == "":
                     updates["category_id"] = None
@@ -861,18 +897,52 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
     @mcp.tool()
     def place_task(
         task_id: int,
-        important: bool,
-        urgent: bool,
+        important: bool | None = None,
+        urgent: bool | None = None,
+        task_type: str | None = None,
         confirmed: bool = False,
     ) -> dict:
-        """Place a pipeline task into a matrix quadrant. confirmed=True required."""
-        imp, urg = (1 if important else 0), (1 if urgent else 0)
-        quadrant = _quadrant_label(imp, urg)
+        """Promote a pipeline task to Active (placed=1). confirmed=True required.
+
+        Does NOT derive placement from important/urgent (v2). Pass important/urgent
+        only to set those flags. Optional task_type ∈ adhoc|recurring|project sets
+        a type_override when it differs from the natural type.
+        """
+        if task_type is not None and task_type not in _TASK_TYPES:
+            raise ValueError(f"task_type must be one of {_TASK_TYPES}.")
         if not confirmed:
-            return _place_task_preview(task_id, important, urgent, quadrant)
+            return _place_task_preview(
+                task_id, task_type=task_type, important=important, urgent=urgent
+            )
         with open_db(focus_db_path) as conn:
-            task_svc.place_task(conn, task_id, imp, urg)
-        return {"ok": True, "id": task_id, "quadrant": quadrant}
+            task = task_svc.get_task(conn, task_id)
+            if not task:
+                raise ValueError(f"Task {task_id} not found.")
+            if task["is_recurring"]:
+                raise ValueError("Cannot place a recurring template — start it first.")
+            flag_updates = {}
+            if important is not None:
+                flag_updates["important"] = 1 if important else 0
+            if urgent is not None:
+                flag_updates["urgent"] = 1 if urgent else 0
+            if flag_updates:
+                task_svc.update_task(conn, task_id, **flag_updates)
+            task_svc.set_task_band(conn, task_id, band="active", target_type=task_type)
+            return _slim_mutate(task_svc.get_task(conn, task_id))
+
+    @mcp.tool()
+    def promote_to_active(
+        task_id: int,
+        task_type: str | None = None,
+        confirmed: bool = False,
+    ) -> dict:
+        """Promote Pipeline → Active (set placed=1). Alias for place_task without flags.
+
+        Optional task_type ∈ adhoc|recurring|project. confirmed=True required.
+        """
+        return place_task(
+            task_id, task_type=task_type, confirmed=confirmed
+        )
 
     @mcp.tool()
     def complete_task(
@@ -950,8 +1020,11 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
 
     @mcp.tool()
     def move_to_pipeline(task_id: int, confirmed: bool = False) -> dict:
-        """Move in-progress task back to pipeline without completing. confirmed=True required."""
-        preview = {"task_id": task_id, "status": "pipeline"}
+        """Move a task to Pipeline (status=pipeline, placed=0). confirmed=True required.
+
+        Stops the timer if this task is timing. Use for Active/Today → Pipeline demotion.
+        """
+        preview = {"task_id": task_id, "band": "pipeline"}
         blocked = _needs_confirm(confirmed, preview, "move_to_pipeline")
         if blocked:
             return blocked
@@ -959,7 +1032,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
             active = timer_svc.get_active_entry(conn)
             if active and active["task_id"] == task_id:
                 timer_svc.stop_timer(conn)
-            task_svc.move_to_pipeline(conn, task_id)
+            task_svc.set_task_band(conn, task_id, band="pipeline")
             return _slim_mutate(task_svc.get_task(conn, task_id))
 
     def _apply_move_to_in_progress(task_id: int) -> dict:
@@ -980,11 +1053,11 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
 
     @mcp.tool()
     def move_to_in_progress(task_id: int, confirmed: bool = False) -> dict:
-        """Move a task to In Progress Today (kanban section on the board).
+        """Move a task to Today (in_progress). confirmed=True required.
 
-        Use from pipeline or matrix tasks before start_timer. confirmed=True required.
+        Use from Pipeline or Active before start_timer.
         """
-        preview = {"task_id": task_id, "status": "in_progress"}
+        preview = {"task_id": task_id, "band": "today", "status": "in_progress"}
         blocked = _needs_confirm(confirmed, preview, "move_to_in_progress")
         if blocked:
             return blocked
@@ -992,8 +1065,8 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
 
     @mcp.tool()
     def start_work(task_id: int, confirmed: bool = False) -> dict:
-        """Alias for move_to_in_progress — moves task to In Progress Today."""
-        preview = {"task_id": task_id, "status": "in_progress"}
+        """Alias for move_to_in_progress — moves task to Today."""
+        preview = {"task_id": task_id, "band": "today", "status": "in_progress"}
         blocked = _needs_confirm(confirmed, preview, "start_work")
         if blocked:
             return blocked
@@ -1179,7 +1252,8 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
     ) -> dict:
         """Create a recurring template root (Recurring section — not an active task).
 
-        Set important/urgent to place in a matrix quadrant when cloned via start_recurring.
+        Set important/urgent as explicit flags on the template (and its clones).
+        In v2 these no longer control board placement — use promote_to_active / start_work.
         confirmed=True required to write.
         """
         imp = 1 if important else 0
@@ -1538,24 +1612,33 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
         return {"ok": True, "status": status, "results": results}
 
     @mcp.tool()
-    def bulk_place(task_ids: list[int], quadrant: str, confirmed: bool = False) -> dict:
-        """Place several pipeline tasks into the same matrix quadrant. confirmed=True required.
+    def bulk_place(
+        task_ids: list[int],
+        task_type: str | None = None,
+        quadrant: str | None = None,
+        confirmed: bool = False,
+    ) -> dict:
+        """Promote several pipeline tasks to Active. confirmed=True required.
 
-        quadrant ∈ do (urgent+important) | sched (important) | del (urgent) | later.
-        Per-task issues (not found) are reported inline, not fatal.
+        Optional task_type ∈ adhoc|recurring|project applied to each.
+        Legacy `quadrant` (do/sched/del/later) is accepted but ignored for
+        placement — important/urgent flags are set from it for back-compat only.
         """
-        if quadrant not in _QUADRANT_FLAGS:
+        if task_type is not None and task_type not in _TASK_TYPES:
+            raise ValueError(f"task_type must be one of {_TASK_TYPES}.")
+        if quadrant is not None and quadrant not in _QUADRANT_FLAGS:
             raise ValueError(f"quadrant must be one of {sorted(_QUADRANT_FLAGS)}.")
         if not task_ids:
             raise ValueError("Provide at least one task_id.")
-        imp, urg = _QUADRANT_FLAGS[quadrant]
+        imp = urg = None
+        if quadrant is not None:
+            imp, urg = _QUADRANT_FLAGS[quadrant]
         blocked = _needs_confirm(
             confirmed,
             {
                 "task_ids": task_ids,
-                "quadrant": quadrant,
-                "important": bool(imp),
-                "urgent": bool(urg),
+                "band": "active",
+                "task_type": task_type,
                 "count": len(task_ids),
             },
             "bulk_place",
@@ -1569,9 +1652,17 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                 if not task:
                     results.append({"id": task_id, "ok": False, "error": "not found"})
                     continue
-                task_svc.place_task(conn, task_id, imp, urg)
-                results.append({"id": task_id, "quadrant": quadrant, "ok": True})
-        return {"ok": True, "quadrant": quadrant, "results": results}
+                if imp is not None:
+                    task_svc.update_task(conn, task_id, important=imp, urgent=urg)
+                task_svc.set_task_band(conn, task_id, band="active", target_type=task_type)
+                row = task_svc.get_task(conn, task_id)
+                results.append({
+                    "id": task_id,
+                    "band": "active",
+                    "type": task_svc.resolve_task_type(row),
+                    "ok": True,
+                })
+        return {"ok": True, "band": "active", "results": results}
 
     @mcp.tool()
     def add_time_entry(

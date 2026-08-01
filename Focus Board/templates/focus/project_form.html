@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Edit Project — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('focus.static', filename='focus/focus.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="form-page">
+  <div class="form-card">
+    <h2 class="form-title">Edit Project</h2>
+    <p class="form-hint" style="margin:0 0 18px">{{ done }} of {{ total }} linked tasks completed</p>
+
+    <form method="post">
+      <div class="form-group">
+        <label for="name">Project name *</label>
+        <input type="text" id="name" name="name" class="form-input"
+               value="{{ project['name'] }}" required autofocus>
+      </div>
+
+      <div class="form-group">
+        <label for="description">Description</label>
+        <textarea id="description" name="description" rows="4"
+                  class="form-input">{{ project['description'] or '' }}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="completion_pct">Completion %</label>
+        <input type="number" id="completion_pct" name="completion_pct" class="form-input"
+               min="0" max="100" step="1"
+               value="{{ project.get('completion_pct', 0) }}">
+        <p class="form-hint">Manual progress for the project as a whole (0–100).</p>
+      </div>
+
+      <div class="form-group">
+        <label class="flag-chip form-flag">
+          <input type="checkbox" name="archived"
+                 {% if project['status'] == 'archived' %}checked{% endif %}>
+          Archive project
+        </label>
+        <p class="form-hint">Archiving hides the project but keeps its tasks and history.</p>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">Save project</button>
+        <a href="{{ url_for('focus.board') }}" class="btn-cancel-link">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
