@@ -1,0 +1,770 @@
+{% extends "base.html" %}
+{% block title %}Board — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('focus.static', filename='focus/focus.css') }}">
+{% endblock %}
+
+{% block content %}
+
+{% macro task_frame_class(task) -%}
+{%- if task.get('has_accent') %} has-accent frame-{{ task.get('frame_style', 'subtle') }}{% endif -%}
+{%- if task.get('procrastinate') %} procrastinate{% endif -%}
+{%- endmacro %}
+
+{% macro task_frame_style(task, extra='') -%}
+{%- if task.get('accent') %}--accent: {{ task['accent'] }}; {% endif -%}{{ extra }}
+{%- endmacro %}
+
+{% macro procrastinate_toggle(task) -%}
+<form method="post" action="{{ url_for('focus.toggle_procrastinate', task_id=task['id']) }}" class="proc-toggle-form">
+  <button type="submit" class="btn-procrastinate{% if task.get('procrastinate') %} active{% endif %}"
+          title="Toggle procrastination marker">⏳</button>
+</form>
+{%- endmacro %}
+
+{% macro chip_cat(task) -%}
+{% if task.get('category_name') %}
+<span class="chip chip-cat tile-chip"{% if task.get('accent') %} style="background: color-mix(in srgb, {{ task['accent'] }} 18%, white); color: {{ task['accent'] }};"{% endif %}>{{ task['category_name'] }}</span>
+{% endif %}
+{%- endmacro %}
+
+{# ── Timer bar ──────────────────────────────────────────────────────────── #}
+{% if active_timer %}
+<div class="prod-timer-bar">
+  <span class="timer-icon">⏱</span>
+  <span class="timer-task">{{ active_timer['task_title'] }}</span>
+  <span class="timer-elapsed"
+        id="timer-elapsed"
+        data-started-at="{{ active_timer['started_at'] }}"></span>
+  <button type="button"
+          class="btn-timer-stop"
+          data-task-id="{{ active_timer['task_id'] }}"
+          data-task-title="{{ active_timer['task_title']|e }}"
+          onclick="openStopTimerModal(this)">&#9632; Stop</button>
+</div>
+{% endif %}
+
+{# ── Toolbar: search + quick-add ────────────────────────────────────────── #}
+<div class="prod-toolbar">
+  <input type="text" id="task-search" placeholder="Search tasks…" class="prod-search" autocomplete="off">
+  <a href="{{ url_for('focus.categories') }}" class="toolbar-link">Categories</a>
+</div>
+
+<form method="post" action="{{ url_for('focus.add_task') }}" class="prod-quick-add" id="quick-add-form">
+  <div class="quick-add-row">
+    <input type="text" name="title" placeholder="New task name…" required autocomplete="off" class="quick-add-input">
+    <button type="submit" class="btn-primary">+ Add</button>
+  </div>
+  <div class="quick-add-row quick-add-controls">
+    <select name="parent_category_id" id="qa-parent-cat" class="quick-select">
+      <option value="">Category…</option>
+      {% for cat in parent_categories %}
+      <option value="{{ cat['id'] }}">{{ cat['name'] }}</option>
+      {% endfor %}
+      <option value="__new__">➕ New category…</option>
+    </select>
+    <input type="text" name="new_category" id="qa-new-cat" placeholder="New category name…"
+           class="quick-add-input qa-new-cat" style="display:none">
+    <span id="qa-new-cat-options" class="qa-new-cat-options" style="display:none">
+      <span class="swatch-picker swatch-picker-inline">
+        {% for sw in palette %}
+        <label class="swatch-option" title="{{ sw['label'] }}">
+          <input type="radio" name="new_category_color" value="{{ sw['hex'] }}"
+                 {% if loop.first %}checked{% endif %}>
+          <span class="swatch-dot" style="background:{{ sw['hex'] }}"></span>
+        </label>
+        {% endfor %}
+      </span>
+      <select name="new_category_frame_style" class="quick-select">
+        {% for fs in frame_styles %}
+        <option value="{{ fs }}">{{ fs|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </span>
+    <select name="category_id" id="qa-sub-cat" class="quick-select" disabled>
+      <option value="">Subcategory…</option>
+      {% for cat in all_categories %}
+        {% if cat['parent_id'] %}
+      <option value="{{ cat['id'] }}" data-parent="{{ cat['parent_id'] }}" hidden>{{ cat['name'] }}</option>
+        {% endif %}
+      {% endfor %}
+      <option value="__new__">➕ New subcategory…</option>
+    </select>
+    <input type="text" name="new_subcategory" id="qa-new-sub" placeholder="New subcategory name…"
+           class="quick-add-input qa-new-sub" style="display:none">
+    <label class="quick-field">
+      <span class="quick-field-label">Due date</span>
+      <input type="date" name="due_date" class="quick-date">
+    </label>
+    <label class="quick-field">
+      <span class="quick-field-label">Effort</span>
+      <select name="size" class="quick-select">
+        <option value="small">Small</option>
+        <option value="medium" selected>Med</option>
+        <option value="big">Large</option>
+      </select>
+    </label>
+    <label class="flag-chip"><input type="checkbox" name="important"> Important</label>
+    <label class="flag-chip"><input type="checkbox" name="urgent"> Urgent</label>
+    <label class="flag-chip"><input type="checkbox" id="qa-project-toggle"> Project</label>
+    <label class="flag-chip"><input type="checkbox" id="qa-subtask-toggle"> Subtask of</label>
+    <label class="flag-chip"><input type="checkbox" name="is_recurring" id="qa-recurring-toggle"> Recurring</label>
+  </div>
+  <p class="form-hint qa-recurring-hint" id="qa-recurring-hint" style="display:none">
+    Recurring items are templates in the <strong>Recurring</strong> section below.
+    Choose a recurring template as parent — not an active matrix task.
+  </p>
+  <div class="quick-add-row qa-conditional" id="qa-project-row" style="display:none">
+    <select name="project_id" class="quick-select">
+      <option value="">Select project…</option>
+      {% for proj in projects %}
+      <option value="{{ proj['id'] }}">{{ proj['name'] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="quick-add-row qa-conditional" id="qa-subtask-row" style="display:none">
+    <select name="parent_id" id="qa-parent-active" class="quick-select">
+      <option value="">Select parent task…</option>
+      {% for t in top_level_tasks %}
+      <option value="{{ t['id'] }}">{{ t['title'] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="quick-add-row qa-conditional" id="qa-recurring-subtask-row" style="display:none">
+    <select id="qa-parent-recurring" class="quick-select" disabled>
+      <option value="">Recurring template…</option>
+      {% for t in recurring_roots %}
+      <option value="{{ t['id'] }}">{{ t['title'] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+
+{# ── In Progress ─────────────────────────────────────────────────────────── #}
+<div class="prod-section prod-section-plain">
+  <div class="prod-section-title">
+    In Progress Today
+    <span class="effort-tally">
+      <span class="{{ 'tally-warn' if size_counts.get('big', 0) > 1 }}">
+        {{ size_counts.get('big', 0) }} large
+      </span>
+      ·
+      <span class="{{ 'tally-warn' if size_counts.get('medium', 0) > 3 }}">
+        {{ size_counts.get('medium', 0) }}/3 med
+      </span>
+      ·
+      <span class="{{ 'tally-warn' if size_counts.get('small', 0) > 5 }}">
+        {{ size_counts.get('small', 0) }}/5 small
+      </span>
+    </span>
+  </div>
+  {% if in_progress %}
+  <div class="kanban-row" id="inprogress-list">
+    {% for task in in_progress %}
+    <div class="kanban-card size-{{ task['size'] }}{{ task_frame_class(task) }}"
+         data-task-id="{{ task['id'] }}"
+         data-task-title="{{ task['title']|e }}"
+         style="{{ task_frame_style(task) }}">
+      <span class="drag-handle kanban-handle" title="Drag to quadrant">&#8286;</span>
+      {{ procrastinate_toggle(task) }}
+      <div class="kanban-title">{{ task['title'] }}</div>
+      {% if task.get('category_name') %}
+      <div class="kanban-cat">{{ task['category_name'] }}</div>
+      {% endif %}
+      {% if task.get('parent_title') %}
+      <span class="subtask-parent-chip">↳ {{ task['parent_title'] }}</span>
+      {% endif %}
+      <div class="kanban-meta">
+        <span class="effort-badge effort-{{ task['size'] }}">{{ task.get('effort_label', 'Med') }}</span>
+        {% if task.get('due_date') %}<span class="kanban-due">{{ task['due_date'] }}</span>{% endif %}
+      </div>
+      <div class="kanban-actions">
+        <form method="post"
+              action="{{ url_for('focus.start_timer', task_id=task['id']) }}"
+              style="display:inline">
+          <button type="submit" class="btn-timer-start"
+                  {% if active_timer and active_timer['task_id'] == task['id'] %}disabled{% endif %}>
+            {% if active_timer and active_timer['task_id'] == task['id'] %}
+            &#9646;&#9646; Timing
+            {% else %}
+            &#9654; Timer
+            {% endif %}
+          </button>
+        </form>
+        <div class="kanban-actions-right">
+          <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}"
+             class="btn-tile-edit btn-sm">Edit</a>
+          <button type="button"
+                  class="btn-done"
+                  data-task-id="{{ task['id'] }}"
+                  data-task-title="{{ task['title']|e }}"
+                  onclick="openDoneModal(this)">
+            Done ✓
+          </button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty-hint">Nothing in progress today. Start one from the matrix below.</p>
+  {% endif %}
+</div>
+
+{# ── Focus Matrix ───────────────────────────────────────────────────── #}
+<details class="prod-section" open>
+  <summary class="prod-section-title">Focus Matrix</summary>
+
+  <div class="matrix-grid">
+    {% for q_key, meta in quadrant_meta.items() %}
+    {% set q_tasks = quadrants[q_key] %}
+    <div class="matrix-quadrant" id="quadrant-{{ q_key }}">
+      <div class="quadrant-header" style="background:{{ meta['color'] }}">
+        {{ meta['label'] }}
+        {% if q_tasks %}<span class="q-count">{{ q_tasks|length }}</span>{% endif %}
+      </div>
+      <ul class="quadrant-list" data-quadrant="{{ q_key }}">
+        {% for task in q_tasks %}
+        <li class="task-tile{{ task_frame_class(task) }}"
+            data-task-id="{{ task['id'] }}"
+            data-task-title="{{ task['title']|e }}"
+            style="{{ task_frame_style(task, '--q-color:' ~ meta['color'] ~ ';') }}">
+          <span class="drag-handle" title="Drag">&#8286;</span>
+          {{ procrastinate_toggle(task) }}
+          <div class="tile-main">
+            <div class="tile-title-row">
+              <span class="tile-title">{{ task['title'] }}</span>
+              {% if task.get('subtasks_remaining', 0) > 0 %}
+              <span class="subtask-badge">↳ {{ task['subtasks_remaining'] }} left</span>
+              {% endif %}
+              {% if task.get('parent_title') %}
+              <span class="subtask-parent-chip">↳ {{ task['parent_title'] }}</span>
+              {% endif %}
+            </div>
+            {% if task.get('subtask_total', 0) > 0 %}
+            <div class="tile-progress-bar">
+              <div class="tile-progress-fill"
+                   style="width:{{ (task.get('subtask_done', 0) / task['subtask_total'] * 100)|int }}%"></div>
+            </div>
+            {% endif %}
+          </div>
+          {% if task.get('category_name') %}
+          {{ chip_cat(task) }}
+          {% endif %}
+          <span class="chip chip-effort effort-{{ task.get('size', 'medium') }} tile-chip">{{ task.get('effort_label', 'Med') }}</span>
+          {% if task.get('due_date') %}
+          <span class="chip chip-due tile-chip">{{ task['due_date'] }}</span>
+          {% endif %}
+          {% if task.get('time_badge') %}
+          <span class="time-badge time-badge-{{ task['time_badge']['type'] }}">{{ task['time_badge']['text'] }}</span>
+          {% endif %}
+          <div class="tile-actions">
+            <form method="post"
+                  action="{{ url_for('focus.update_status', task_id=task['id']) }}"
+                  style="display:inline">
+              <input type="hidden" name="status" value="in_progress">
+              <button type="submit" class="btn-start btn-sm">Start</button>
+            </form>
+            <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}"
+               class="btn-tile-edit btn-sm">Edit</a>
+            <button type="button" class="btn-sub-add btn-sm"
+                    onclick="toggleSubAdd(this, {{ task['id'] }})">+ Sub</button>
+          </div>
+          <form method="post" action="{{ url_for('focus.add_task') }}"
+                class="tile-sub-form" style="display:none">
+            <input type="hidden" name="parent_id" value="{{ task['id'] }}">
+            <input type="hidden" name="inherit_parent" value="1">
+            <input type="text" name="title" placeholder="Subtask title…" required class="quick-add-input">
+            <button type="submit" class="btn-primary btn-sm">Add</button>
+          </form>
+        </li>
+        {% endfor %}
+        <li class="quadrant-drop-hint" data-quadrant="{{ q_key }}">
+          Drop task here
+        </li>
+      </ul>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+
+{# ── Pipeline ────────────────────────────────────────────────────────────── #}
+<div class="prod-section prod-section-plain">
+  <div class="prod-section-title">
+    Pipeline
+    {% if unplaced %}<span class="count-badge">{{ unplaced|length }}</span>{% endif %}
+    {% if unplaced|length > 3 %}
+    <button type="button" class="pipeline-toggle" id="pipeline-toggle">Show {{ unplaced|length - 3 }} more</button>
+    {% endif %}
+  </div>
+
+  {% if unplaced %}
+  <ul class="pipeline-list collapsed" id="pipeline-list">
+    {% for task in unplaced %}
+    <li class="pipeline-item{{ task_frame_class(task) }}"
+        data-task-id="{{ task['id'] }}"
+        data-task-title="{{ task['title']|e }}"
+        style="{{ task_frame_style(task) }}">
+      <span class="drag-handle" title="Drag to quadrant">&#8286;</span>
+      {{ procrastinate_toggle(task) }}
+      <span class="task-title">{{ task['title'] }}</span>
+      <span class="pipeline-chips">
+        {% if task['category_name'] %}
+          {{ chip_cat(task) }}
+        {% endif %}
+        <span class="chip chip-effort effort-{{ task.get('size', 'medium') }}">{{ task.get('effort_label', 'Med') }}</span>
+        {% if task['due_date'] %}
+          <span class="chip chip-due">{{ task['due_date'] }}</span>
+        {% endif %}
+        {% if task.get('parent_title') %}
+          <span class="chip chip-parent">↳ {{ task['parent_title'] }}</span>
+        {% endif %}
+      </span>
+      <span class="pipeline-actions">
+        <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}" class="link-edit">edit</a>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty-hint">All tasks placed. Add a new one above.</p>
+  {% endif %}
+</div>
+
+{# ── Projects backlog ────────────────────────────────────────────────────── #}
+<details class="prod-section">
+  <summary class="prod-section-title">
+    Projects
+    <span class="section-meta">{{ project_backlogs|length }} projects · {{ projects_done }}/{{ projects_total }} tasks done</span>
+  </summary>
+  <div class="projects-backlog">
+    {% for pb in project_backlogs %}
+    <div class="project-block" data-project-id="{{ pb['project']['id'] }}">
+      <div class="project-block-header">
+        <span class="drag-handle project-drag-handle" title="Drag to reorder">&#8286;</span>
+        <span class="proj-name">{{ pb['project']['name'] }}</span>
+        <span class="proj-count">{{ pb['done'] }}/{{ pb['total'] }}</span>
+      </div>
+      <ul class="project-backlog-list" data-project-id="{{ pb['project']['id'] }}">
+        {% for task in pb['tasks'] %}
+        <li class="project-backlog-item"
+            data-task-id="{{ task['id'] }}"
+            data-task-title="{{ task['title']|e }}">
+          <span class="drag-handle" title="Drag to quadrant">&#8286;</span>
+          <span class="task-title">{{ task['title'] }}</span>
+        </li>
+        {% endfor %}
+        {% if not pb['tasks'] %}
+        <li class="project-backlog-empty">no tasks yet</li>
+        {% endif %}
+      </ul>
+      <form method="post" action="{{ url_for('focus.add_task') }}" class="project-inline-add">
+        <input type="hidden" name="project_id" value="{{ pb['project']['id'] }}">
+        <input type="text" name="title" placeholder="Add task to project…" required class="quick-add-input">
+        <button type="submit" class="btn-primary btn-sm">+ Add</button>
+      </form>
+    </div>
+    {% endfor %}
+    {% if not project_backlogs %}
+    <p class="empty-hint">No projects yet — add your first below.</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('focus.add_project') }}" class="project-add-new">
+      <input type="text" name="name" placeholder="New project name…" required autocomplete="off" class="quick-add-input">
+      <button type="submit" class="btn-primary btn-sm">+ New project</button>
+    </form>
+  </div>
+</details>
+
+{# ── Recurring templates ─────────────────────────────────────────────────── #}
+{% if recurring %}
+<details class="prod-section">
+  <summary class="prod-section-title">
+    Recurring
+    <span class="count-badge">{{ recurring|length }}</span>
+  </summary>
+  <p class="form-hint" style="margin:0 0 12px">Templates only — click <strong>Start</strong> to place this month on the matrix.</p>
+  <div class="recurring-list">
+    {% for tmpl in recurring %}
+    <div class="recurring-tree">
+      <div class="recurring-root">
+        <span class="recurring-title">{{ tmpl['root']['title'] }}</span>
+        <span class="recurring-quadrant">{{ tmpl['root']['quadrant_label'] }}</span>
+        <a href="{{ url_for('focus.edit_task', task_id=tmpl['root']['id']) }}" class="link-edit">Edit</a>
+        <form method="post" action="{{ url_for('focus.start_recurring', template_id=tmpl['root']['id']) }}" style="display:inline">
+          <button type="submit" class="btn-start btn-sm">Start</button>
+        </form>
+      </div>
+      {% for sub in tmpl['subtasks'] %}
+      <div class="recurring-sub">
+        <span class="recurring-sub-marker">↳</span>
+        <span class="recurring-title">{{ sub['title'] }}</span>
+        <span class="recurring-quadrant">{{ sub['quadrant_label'] }}</span>
+        <a href="{{ url_for('focus.edit_task', task_id=sub['id']) }}" class="link-edit">Edit</a>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{# ── Recently Completed ──────────────────────────────────────────────────── #}
+{% if completed %}
+<details class="prod-section">
+  <summary class="prod-section-title">Recently Completed</summary>
+  <ul class="completed-list">
+    {% for task in completed %}
+    <li class="completed-item">
+      <span class="comp-emoji">{{ task.get('enthusiasm_emoji') or '✓' }}</span>
+      <span class="comp-title">{{ task['title'] }}</span>
+      <span class="comp-meta">
+        {% if task.get('completed_on') %}
+          {{ task['completed_on'][:10] }}
+        {% endif %}
+        {% if task.get('total_secs') and task['total_secs'] > 0 %}
+          · {{ (task['total_secs'] // 3600) }}h {{ '%02d'|format(task['total_secs'] % 3600 // 60) }}m
+        {% endif %}
+      </span>
+      <form method="post" action="{{ url_for('focus.reopen_task', task_id=task['id']) }}" class="comp-reopen-form">
+        <button type="submit" class="btn-reopen btn-sm" title="Move back to open tasks">Reopen</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}
+
+{# ── Stop Timer Modal ─────────────────────────────────────────────────────── #}
+{% if active_timer %}
+<div id="stop-timer-modal" class="modal-overlay" style="display:none" onclick="closeStopTimerModal(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <p class="modal-question">Are you done with<br><strong id="stop-modal-task-title"></strong>?</p>
+    <div class="stop-modal-actions">
+      <button type="button" class="btn-mark-done" onclick="stopTimerMarkDone()">Yes, mark done</button>
+      <form method="post" action="{{ url_for('focus.stop_timer') }}">
+        <button type="submit" class="btn-stop-only">No — just stop timer</button>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button type="button" onclick="closeStopTimerModal()" class="btn-cancel-link">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Done Modal (enthusiasm picker) ─────────────────────────────────────── #}
+<div id="done-modal" class="modal-overlay" style="display:none" onclick="closeDoneModal(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <p class="modal-question">How did it feel to finish<br><strong id="modal-task-title"></strong>?</p>
+    <form method="post" id="done-form">
+      <input type="hidden" name="status" value="done">
+      <div class="emoji-picker">
+        {% for score, emoji in enthusiasm_emoji.items() %}
+        <button type="submit" name="enthusiasm" value="{{ score }}"
+                class="emoji-btn" title="Level {{ score }}">{{ emoji }}</button>
+        {% endfor %}
+      </div>
+      <div class="modal-footer">
+        <button type="submit" name="enthusiasm" value="" class="btn-skip">Skip</button>
+        <button type="button" onclick="closeDoneModal()" class="btn-cancel-link">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('focus.static', filename='focus/sortable.min.js') }}"></script>
+<script src="{{ url_for('focus.static', filename='focus/timer.js') }}"></script>
+<script>
+// ── Quick-add toggles ────────────────────────────────────────────────────
+const qaParentCat = document.getElementById('qa-parent-cat');
+const qaSubCat = document.getElementById('qa-sub-cat');
+const qaNewCat = document.getElementById('qa-new-cat');
+const qaNewCatOpts = document.getElementById('qa-new-cat-options');
+const qaNewSub = document.getElementById('qa-new-sub');
+
+function syncQuickAddCategories() {
+  if (!qaParentCat) return;
+  const pid = qaParentCat.value;
+  const isNewParent = pid === '__new__';
+  if (qaNewCat) qaNewCat.style.display = isNewParent ? '' : 'none';
+  if (qaNewCatOpts) qaNewCatOpts.style.display = isNewParent ? '' : 'none';
+  if (qaSubCat) {
+    qaSubCat.disabled = !pid;
+    if (!pid || isNewParent) qaSubCat.value = '';
+    qaSubCat.querySelectorAll('option[data-parent]').forEach(function(opt) {
+      opt.hidden = isNewParent || !pid || opt.dataset.parent !== pid;
+    });
+  }
+  if (qaNewSub && (!qaSubCat || qaSubCat.value !== '__new__')) {
+    qaNewSub.style.display = 'none';
+  }
+}
+
+if (qaParentCat) {
+  qaParentCat.addEventListener('change', syncQuickAddCategories);
+}
+if (qaSubCat) {
+  qaSubCat.addEventListener('change', function() {
+    if (qaNewSub) qaNewSub.style.display = this.value === '__new__' ? '' : 'none';
+  });
+}
+
+document.getElementById('qa-project-toggle')?.addEventListener('change', function() {
+  const row = document.getElementById('qa-project-row');
+  const sel = row.querySelector('select');
+  row.style.display = this.checked ? '' : 'none';
+  if (sel) sel.disabled = !this.checked;
+});
+document.getElementById('qa-subtask-toggle')?.addEventListener('change', function() {
+  syncQuickAddParentPickers();
+});
+document.getElementById('qa-recurring-toggle')?.addEventListener('change', function() {
+  syncQuickAddParentPickers();
+});
+
+function syncQuickAddParentPickers() {
+  const subtaskOn = document.getElementById('qa-subtask-toggle')?.checked;
+  const recurringOn = document.getElementById('qa-recurring-toggle')?.checked;
+  const hint = document.getElementById('qa-recurring-hint');
+  const activeRow = document.getElementById('qa-subtask-row');
+  const recurringRow = document.getElementById('qa-recurring-subtask-row');
+  const activeSel = document.getElementById('qa-parent-active');
+  const recurringSel = document.getElementById('qa-parent-recurring');
+
+  if (hint) hint.style.display = recurringOn ? '' : 'none';
+
+  if (recurringOn && subtaskOn) {
+    if (activeRow) activeRow.style.display = 'none';
+    if (recurringRow) recurringRow.style.display = '';
+    if (activeSel) {
+      activeSel.disabled = true;
+      activeSel.removeAttribute('name');
+    }
+    if (recurringSel) {
+      recurringSel.disabled = false;
+      recurringSel.setAttribute('name', 'parent_id');
+    }
+  } else if (subtaskOn) {
+    if (activeRow) activeRow.style.display = '';
+    if (recurringRow) recurringRow.style.display = 'none';
+    if (activeSel) {
+      activeSel.disabled = false;
+      activeSel.setAttribute('name', 'parent_id');
+    }
+    if (recurringSel) {
+      recurringSel.disabled = true;
+      recurringSel.removeAttribute('name');
+    }
+  } else {
+    if (activeRow) activeRow.style.display = 'none';
+    if (recurringRow) recurringRow.style.display = 'none';
+    if (activeSel) {
+      activeSel.disabled = true;
+      activeSel.removeAttribute('name');
+    }
+    if (recurringSel) {
+      recurringSel.disabled = true;
+      recurringSel.removeAttribute('name');
+    }
+  }
+}
+
+syncQuickAddParentPickers();
+// Disable hidden selects on load
+document.querySelectorAll('.qa-conditional select').forEach(function(sel) {
+  sel.disabled = sel.closest('.qa-conditional').style.display === 'none';
+});
+
+// ── Pipeline collapse toggle ─────────────────────────────────────────────
+const pipelineList = document.getElementById('pipeline-list');
+const pipelineToggle = document.getElementById('pipeline-toggle');
+if (pipelineToggle && pipelineList) {
+  pipelineToggle.addEventListener('click', function() {
+    const collapsed = pipelineList.classList.toggle('collapsed');
+    const hidden = pipelineList.querySelectorAll('.pipeline-item').length - 3;
+    this.textContent = collapsed ? 'Show ' + hidden + ' more' : 'Show less';
+  });
+}
+
+// ── Client-side search ───────────────────────────────────────────────────
+const searchInput = document.getElementById('task-search');
+if (searchInput) {
+  searchInput.addEventListener('input', function() {
+    const q = this.value.toLowerCase().trim();
+    const forceExpand = q.length > 0;
+    if (pipelineList && forceExpand) {
+      pipelineList.classList.remove('collapsed');
+      if (pipelineToggle) pipelineToggle.textContent = 'Show less';
+    }
+    const searchable = document.querySelectorAll(
+      '.pipeline-item, .task-tile, .kanban-card, .project-backlog-item'
+    );
+    searchable.forEach(function(el) {
+      if (!q) { el.style.display = ''; return; }
+      const title = (el.dataset.taskTitle || '').toLowerCase();
+      el.style.display = title.includes(q) ? '' : 'none';
+    });
+  });
+}
+
+// ── SortableJS — shared group config ─────────────────────────────────────
+const BOARD_GROUP = { name: 'board', pull: true, put: true };
+
+function postJson(url, data) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+}
+
+// Persist the FULL order of a list so every item's sort_order is renumbered
+// (renumbering only the dragged item leaves duplicate sort_orders → order lost).
+function persistOrder(listEl, itemSelector) {
+  const order = [...listEl.querySelectorAll(itemSelector)]
+    .map(function(el) { return parseInt(el.dataset.taskId, 10); })
+    .filter(function(n) { return !isNaN(n); });
+  return postJson('/focus/tasks/reorder', { order: order });
+}
+
+// Pipeline list (source only)
+if (pipelineList) {
+  Sortable.create(pipelineList, {
+    group: { name: 'board', pull: true, put: false },
+    animation: 150,
+    handle: '.drag-handle',
+    ghostClass: 'drag-ghost',
+    onEnd: function(evt) {
+      if (evt.to === pipelineList) {
+        persistOrder(pipelineList, '.pipeline-item');
+      }
+    }
+  });
+}
+
+// Project backlog lists (source only)
+document.querySelectorAll('.project-backlog-list').forEach(function(listEl) {
+  Sortable.create(listEl, {
+    group: { name: 'board', pull: true, put: false },
+    animation: 150,
+    handle: '.drag-handle',
+    ghostClass: 'drag-ghost',
+    filter: '.project-backlog-empty',
+  });
+});
+
+// Reorder project blocks (isolated 'projects' group; only the header handle drags)
+const projectsBacklog = document.querySelector('.projects-backlog');
+if (projectsBacklog) {
+  Sortable.create(projectsBacklog, {
+    group: 'projects',
+    draggable: '.project-block',
+    handle: '.project-drag-handle',
+    animation: 150,
+    ghostClass: 'drag-ghost',
+    onEnd: function() {
+      const order = [...projectsBacklog.querySelectorAll('.project-block')]
+        .map(function(el) { return parseInt(el.dataset.projectId, 10); });
+      postJson('/focus/projects/reorder', { order: order });
+    }
+  });
+}
+
+// Quadrant lists (full cross-list drag)
+document.querySelectorAll('.quadrant-list').forEach(function(listEl) {
+  const quadrant = listEl.dataset.quadrant;
+  Sortable.create(listEl, {
+    group: BOARD_GROUP,
+    animation: 150,
+    handle: '.drag-handle',
+    ghostClass: 'drag-ghost',
+    filter: '.quadrant-drop-hint',
+    onAdd: function(evt) {
+      const taskId = evt.item.dataset.taskId;
+      postJson('/focus/task/' + taskId + '/place', { quadrant: quadrant })
+        .then(function() { return persistOrder(listEl, '.task-tile'); })
+        .then(function() { location.reload(); });
+    },
+    onUpdate: function() {
+      persistOrder(listEl, '.task-tile');
+    }
+  });
+});
+
+// In-progress list (can drag back to quadrants)
+const inProgressList = document.getElementById('inprogress-list');
+if (inProgressList) {
+  Sortable.create(inProgressList, {
+    group: { name: 'board', pull: true, put: false },
+    animation: 150,
+    handle: '.drag-handle, .kanban-handle',
+    ghostClass: 'drag-ghost',
+    onUpdate: function() {
+      persistOrder(inProgressList, '.kanban-card');
+    }
+  });
+}
+
+// ── Subtask inline add ───────────────────────────────────────────────────
+function toggleSubAdd(btn, taskId) {
+  const form = btn.closest('.task-tile').querySelector('.tile-sub-form');
+  form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+  if (form.style.display !== 'none') {
+    form.querySelector('input[name=title]').focus();
+  }
+}
+
+// ── Stop timer modal ─────────────────────────────────────────────────────
+function openStopTimerModal(btn) {
+  const modal = document.getElementById('stop-timer-modal');
+  if (!modal) return;
+  document.getElementById('stop-modal-task-title').textContent = btn.dataset.taskTitle;
+  modal.dataset.taskId = btn.dataset.taskId;
+  modal.dataset.taskTitle = btn.dataset.taskTitle;
+  modal.style.display = 'flex';
+}
+function closeStopTimerModal(evt) {
+  const modal = document.getElementById('stop-timer-modal');
+  if (!modal) return;
+  if (!evt || evt.target === modal) {
+    modal.style.display = 'none';
+  }
+}
+function stopTimerMarkDone() {
+  const modal = document.getElementById('stop-timer-modal');
+  if (!modal) return;
+  const taskId = modal.dataset.taskId;
+  const taskTitle = modal.dataset.taskTitle;
+  modal.style.display = 'none';
+  document.getElementById('modal-task-title').textContent = taskTitle;
+  document.getElementById('done-form').action =
+    '/focus/task/' + taskId + '/status';
+  document.getElementById('done-modal').style.display = 'flex';
+}
+
+// ── Done modal ───────────────────────────────────────────────────────────
+function openDoneModal(btn) {
+  const taskId    = btn.dataset.taskId;
+  const taskTitle = btn.dataset.taskTitle;
+  document.getElementById('modal-task-title').textContent = taskTitle;
+  document.getElementById('done-form').action =
+    '/focus/task/' + taskId + '/status';
+  document.getElementById('done-modal').style.display = 'flex';
+}
+function closeDoneModal(evt) {
+  if (!evt || evt.target === document.getElementById('done-modal')) {
+    document.getElementById('done-modal').style.display = 'none';
+  }
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    closeDoneModal();
+    closeStopTimerModal();
+  }
+});
+</script>
+{% endblock %}

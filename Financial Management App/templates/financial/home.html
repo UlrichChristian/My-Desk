@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Financial Management — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('financial.static', filename='financial/financial.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="fin-header">
+  <a class="fin-back" href="{{ url_for('hub.index') }}">
+    <i class="fa-solid fa-arrow-left"></i> My Desk
+  </a>
+  <h1>Financial Management</h1>
+  <p class="lead">Reports, reconciliations, and QuickBooks automations.</p>
+</div>
+
+{% for section in sections %}
+<section class="fin-section">
+  <h2 class="fin-section-title">{{ section.title }}</h2>
+  {% if section.blurb %}<p class="fin-section-blurb">{{ section.blurb }}</p>{% endif %}
+  <div class="cards">
+    {% for tool in section.tools %}
+      {% if tool.available %}
+      <a class="card" href="{{ url_for(tool.href_name) }}">
+      {% else %}
+      <div class="card card-disabled">
+      {% endif %}
+        <span class="card-icon"><i class="fa-solid {{ tool.icon }}"></i></span>
+        <h2>{{ tool.name }}</h2>
+        <p>{{ tool.blurb }}</p>
+        <span class="card-cta">
+          {% if tool.available %}
+            Open <i class="fa-solid fa-arrow-right" style="font-size:8.5pt"></i>
+          {% else %}
+            <span class="coming-soon">Coming soon</span>
+          {% endif %}
+        </span>
+      {% if tool.available %}
+      </a>
+      {% else %}
+      </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+
+{% endblock %}

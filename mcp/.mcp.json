@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "my-desk": {
+      "command": "python",
+      "args": ["C:/Christian/mcp/server.py"],
+      "env": {
+        "MY_DESK_USER": "culrich"
+      }
+    }
+  }
+}

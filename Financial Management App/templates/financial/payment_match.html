@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Match Invoices & Payments — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('financial.static', filename='financial/financial.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="fin-header">
+  <a class="fin-back" href="{{ url_for('financial.home') }}">
+    <i class="fa-solid fa-arrow-left"></i> Financial Management
+  </a>
+  <h1>Match Invoices &amp; Payments</h1>
+  <p class="lead">
+    Batch-apply unapplied QuickBooks payments to open invoices using a prepared
+    Accounts Receivable aging export.
+  </p>
+</div>
+
+<div class="fin-layout">
+  <section class="fin-panel fin-instructions">
+    <h2><i class="fa-solid fa-list-check"></i> Prepare the Excel file</h2>
+    <p class="fin-note">
+      Start from the regular <strong>Accounts receivable aging summary</strong> export
+      in QuickBooks. Clean it up before upload — the automation expects two columns,
+      either <code>Customer</code> + <code>CURRENT</code> or <code>Account</code> +
+      <code>Payment</code>.
+    </p>
+    <ol class="fin-steps">
+      <li>Download the A/R aging summary report.</li>
+      <li>Delete header rows above the column titles and footer rows (totals, date lines).</li>
+      <li>Filter the <strong>Total</strong> column for blanks; delete those rows.</li>
+      <li>Delete customer subtotal rows (bold “Total” rows).</li>
+      <li>Filter aging buckets <strong>31–60</strong>, <strong>61–90</strong>, and
+          <strong>90 and over</strong> — delete rows where any of those are not blank.</li>
+      <li>Delete any row where the total is not zero.</li>
+      <li>Clear customer-column indents (Format cells → indent: 0).</li>
+      <li>Copy the first two columns to a new sheet; rename them <code>Customer</code> and
+          <code>CURRENT</code> (or <code>Account</code> and <code>Payment</code>).</li>
+    </ol>
+
+    <h3>What the automation does</h3>
+    <ul class="fin-bullets">
+      <li>Opens QuickBooks Online in Edge (you log in manually).</li>
+      <li>For each customer in the sheet: search → open → Receive payment on an invoice.</li>
+      <li>Reads the payment date from the first unapplied payment or deposit credit.</li>
+      <li>Verifies <strong>Deposit To</strong> is <strong>ATB - Trust</strong>.</li>
+      <li>Sets the payment date and confirms amount received is <strong>$0.00</strong> before saving.</li>
+    </ul>
+
+    <p class="fin-audit">
+      <i class="fa-solid fa-clipboard-check"></i>
+      Process Street: mirror this run with a to-do step and an audit step.
+    </p>
+  </section>
+
+  <section class="fin-panel fin-form-panel">
+    <h2><i class="fa-solid fa-play"></i> Run batch</h2>
+    <form method="post" enctype="multipart/form-data" class="fin-form">
+      <label class="fin-field">
+        <span class="fin-label">Excel workbook</span>
+        <input type="file" name="excel_file" accept=".xlsx,.xls" required>
+      </label>
+
+      <label class="fin-field">
+        <span class="fin-label">Sheet name</span>
+        <input type="text" name="sheet_name" value="{{ defaults.sheet_name }}" required>
+      </label>
+
+      <label class="fin-field">
+        <span class="fin-label">QuickBooks customer directory URL</span>
+        <input type="url" name="quickbooks_url" value="{{ defaults.quickbooks_url }}" required>
+        <span class="fin-hint">Default opens the QBO customer list after login.</span>
+      </label>
+
+      <label class="fin-field">
+        <span class="fin-label">Max customers this run</span>
+        <input type="number" name="max_customers" min="1" value="{{ defaults.max_customers }}" required>
+        <span class="fin-hint">Cap for testing; set high (e.g. 999) for a full batch.</span>
+      </label>
+
+      <div class="fin-actions">
+        <button type="submit" name="action" value="preview" class="btn-secondary">
+          Preview rows
+        </button>
+        <button type="submit" name="action" value="launch" class="btn-primary">
+          Launch in console
+        </button>
+      </div>
+    </form>
+
+    {% if preview %}
+    <div class="fin-preview">
+      <h3>Preview — {{ preview.filename }}</h3>
+      <p>{{ preview.batch_size }} of {{ preview.total }} customers will run
+         (showing up to 20).</p>
+      <table class="fin-table">
+        <thead>
+          <tr><th>Customer</th><th>CURRENT</th></tr>
+        </thead>
+        <tbody>
+          {% for row in preview.rows %}
+          <tr>
+            <td>{{ row['Customer'] }}</td>
+            <td>{{ row['CURRENT'] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+{% endblock %}

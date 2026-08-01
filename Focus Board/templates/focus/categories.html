@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Categories — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('focus.static', filename='focus/focus.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="form-page">
+  <div class="form-card categories-page">
+    <div class="categories-header">
+      <h2 class="form-title">Categories</h2>
+      <a href="{{ url_for('focus.board') }}" class="btn-cancel-link">← Board</a>
+    </div>
+
+    <form method="post" class="cat-add-form">
+      <input type="hidden" name="action" value="add_parent">
+      <h3 class="cat-section-title">Add parent category</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <input type="text" name="name" placeholder="Category name…" required class="form-input">
+        </div>
+        <div class="form-group">
+          <label class="form-label-inline">Colour</label>
+          <div class="swatch-picker">
+            {% for sw in palette %}
+            <label class="swatch-option" title="{{ sw['label'] }}">
+              <input type="radio" name="color" value="{{ sw['hex'] }}"
+                     {% if loop.first %}checked{% endif %}>
+              <span class="swatch-dot" style="background:{{ sw['hex'] }}"></span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="add-frame">Frame</label>
+          <select id="add-frame" name="frame_style" class="form-select">
+            {% for fs in frame_styles %}
+            <option value="{{ fs }}">{{ fs|capitalize }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group form-group-btn">
+          <button type="submit" class="btn-primary">Add</button>
+        </div>
+      </div>
+    </form>
+
+    {% for parent in parents %}
+    <div class="cat-block">
+      <form method="post" class="cat-edit-form">
+        <input type="hidden" name="action" value="update">
+        <input type="hidden" name="category_id" value="{{ parent['id'] }}">
+        <div class="cat-block-header">
+          <strong>{{ parent['name'] }}</strong>
+          <div class="swatch-picker swatch-picker-compact">
+            {% for sw in palette %}
+            <label class="swatch-option" title="{{ sw['label'] }}">
+              <input type="radio" name="color" value="{{ sw['hex'] }}"
+                {% if parent.get('color') == sw['hex'] %}checked{% elif not parent.get('color') and loop.first %}checked{% endif %}>
+              <span class="swatch-dot" style="background:{{ sw['hex'] }}"></span>
+            </label>
+            {% endfor %}
+          </div>
+          <select name="frame_style" class="form-select form-select-sm">
+            {% for fs in frame_styles %}
+            <option value="{{ fs }}" {% if (parent.get('frame_style') or 'subtle') == fs %}selected{% endif %}>
+              {{ fs|capitalize }}
+            </option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="btn-primary btn-sm">Save</button>
+        </div>
+      </form>
+
+      {% if children_by_parent.get(parent['id']) %}
+      <ul class="cat-children">
+        {% for child in children_by_parent[parent['id']] %}
+        <li>{{ child['name'] }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <form method="post" class="cat-add-sub-form">
+        <input type="hidden" name="action" value="add_sub">
+        <input type="hidden" name="parent_id" value="{{ parent['id'] }}">
+        <input type="text" name="name" placeholder="New subcategory…" class="form-input">
+        <button type="submit" class="btn-primary btn-sm">+ Sub</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

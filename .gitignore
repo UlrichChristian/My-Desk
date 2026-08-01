@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────
+# My Desk workspace .gitignore
+# ─────────────────────────────────────────────────────────────
+
+# Sub-apps with their own git repos (standalone / reference-only)
+/Payroll App/
+/Reconciliation App/
+
+# Live databases & runtime data (not source — back these up separately)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+/Financial Management App/uploads/
+/Financial Management App/temp/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Secrets / local environment (keep the .env.example files)
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# Claude Code machine-local settings
+.claude/settings.local.json
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~

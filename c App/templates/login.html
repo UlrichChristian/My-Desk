@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Sign in — My Desk{% endblock %}
+{% block content %}
+
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-header">
+      <i class="fa-solid fa-circle-user login-avatar"></i>
+      <h1>Sign in</h1>
+      <p>Select your name and enter your password to continue.</p>
+    </div>
+
+    {% if accounts %}
+    <form method="post" action="{{ url_for('auth.login') }}" class="login-form">
+      <input type="hidden" name="next" value="{{ next }}">
+
+      <label>
+        <span>Your name</span>
+        <select name="username" required>
+          <option value="">— Select your name —</option>
+          {% for a in accounts %}
+          <option value="{{ a.username }}">{{ a.display_name }} ({{ a.username }})</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        <span>Password <span class="label-hint">— leave blank if none is set</span></span>
+        <input type="password" name="password" autocomplete="current-password" placeholder="Password">
+      </label>
+
+      <button type="submit" class="btn btn-primary btn-block">
+        <i class="fa-solid fa-right-to-bracket"></i> Sign in
+      </button>
+    </form>
+    {% else %}
+    <div class="flash flash-error" style="margin:20px">
+      <i class="fa-solid fa-circle-exclamation"></i>
+      <span>No user accounts found. Check the database setup.</span>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

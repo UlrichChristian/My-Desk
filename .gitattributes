@@ -1,0 +1,10 @@
+# Normalize line endings; let git handle CRLF/LF automatically
+* text=auto
+
+# Treat these as binary (no line-ending munging)
+*.svg  binary
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.db   binary
+*.xlsx binary

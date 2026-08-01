@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% block title %}Monthly Biggest Clients — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('financial.static', filename='financial/financial.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="fin-header">
+  <a class="fin-back" href="{{ url_for('financial.home') }}">
+    <i class="fa-solid fa-arrow-left"></i> Financial Management
+  </a>
+  <h1>Monthly Biggest Clients</h1>
+  <p class="lead">
+    Top clients by revenue each month — revenue, premium, lives, and the ratios —
+    built from the QuickBooks revenue drilldown enriched with account data.
+  </p>
+</div>
+
+{% if report %}
+<section class="fin-panel">
+  <div class="fin-report-bar">
+    <form method="get" class="fin-field" style="flex-direction:row; align-items:center; gap:8px;">
+      <span class="fin-label">Month</span>
+      <select name="period" class="fin-select" onchange="this.form.submit()">
+        {% for p in periods %}
+        <option value="{{ p }}" {% if p == period %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit" class="btn-secondary">Show</button></noscript>
+    </form>
+    <div style="display:flex; align-items:center; gap:16px;">
+      <span class="fin-note" style="margin:0;">Total revenue: <strong>{{ total_revenue }}</strong></span>
+      <a class="btn-secondary" href="{{ url_for('financial.biggest_clients_export', period=period) }}">
+        <i class="fa-solid fa-file-excel"></i> Export Excel
+      </a>
+    </div>
+  </div>
+
+  <p class="fin-note" style="margin-top:0;">Click a client row to expand product/service detail by income type.</p>
+
+  <div class="fin-report-scroll">
+    <table class="fin-table fin-table-expandable" id="biggest-clients-table"
+           data-detail-url="{{ detail_url }}"
+           data-period="{{ period }}">
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Advisor</th>
+          <th class="num">Revenue</th>
+          <th class="num">Premium*</th>
+          <th class="num">Rev/Prem</th>
+          <th class="num">Lives*</th>
+          <th class="num">Rev/Life</th>
+          <th class="num">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in report %}
+        <tr class="fin-expand-row" data-client="{{ r.client }}" tabindex="0" role="button"
+            aria-expanded="false">
+          <td>
+            <span class="fin-expand-toggle" aria-hidden="true">
+              <i class="fa-solid fa-chevron-right"></i>
+            </span>
+            {{ r.client }}
+          </td>
+          <td>{{ r.advisor }}</td>
+          <td class="num">{{ r.revenue }}</td>
+          <td class="num">{{ r.premium }}</td>
+          <td class="num">{{ r.rev_prem }}</td>
+          <td class="num">{{ r.lives }}</td>
+          <td class="num">{{ r.rev_life }}</td>
+          <td class="num">{{ r.share }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<div class="fin-layout">
+  <section class="fin-panel fin-instructions">
+    <h2><i class="fa-solid fa-list-check"></i> Reports to pull</h2>
+    <p class="fin-note">
+      Each run takes three source files. Pull them the same way every month so the
+      columns stay consistent.
+    </p>
+    <ol class="fin-steps">
+      <li>
+        <strong>Transaction Drilldown</strong> — QuickBooks → <em>Custom reports</em> →
+        <strong>“Ref #1 - Transaction Drill Down”</strong> → export to Excel. Carries a
+        rolling 12 months of revenue with Quantity and Rate.
+      </li>
+      <li>
+        <strong>Account list</strong> — export from the billing site, then
+        <strong>resave as .xlsx</strong> (not legacy .xls). Provides the GROUP ID →
+        Client mapping.
+      </li>
+      <li>
+        <strong>Accounts data (CSV)</strong> — the lives / premium / advisor export.
+        Grab it with the <a href="{{ url_for('financial.pull_accounts') }}">Pull
+        Accounts</a> tool.
+      </li>
+    </ol>
+
+    <h3>Current data</h3>
+    {% if state.last_import %}
+    <p class="fin-note">
+      Last import <strong>#{{ state.last_import.import_id }}</strong>
+      on {{ state.last_import.uploaded_at }}
+      {% if state.last_import.drilldown_from %}
+        (covering {{ state.last_import.drilldown_from }} →
+        {{ state.last_import.drilldown_to }}){% endif %}.
+    </p>
+    {% else %}
+    <p class="fin-note">No data imported yet — upload the three files to get started.</p>
+    {% endif %}
+
+    <p class="fin-audit">
+      <i class="fa-solid fa-clipboard-check"></i>
+      Process Street: mirror each import with a to-do step and an audit step.
+    </p>
+  </section>
+
+  <section class="fin-panel fin-form-panel">
+    <h2><i class="fa-solid fa-upload"></i> Import sources</h2>
+    <form method="post" enctype="multipart/form-data" class="fin-form">
+      <label class="fin-field">
+        <span class="fin-label">Transaction Drilldown (.xlsx)</span>
+        <input type="file" name="drilldown" accept=".xlsx" required>
+      </label>
+
+      <label class="fin-field">
+        <span class="fin-label">Account list (.xlsx / .csv)</span>
+        <input type="file" name="account_list" accept=".xlsx,.csv" required>
+      </label>
+
+      <label class="fin-field">
+        <span class="fin-label">Accounts data (.csv)</span>
+        <input type="file" name="accounts_csv" accept=".csv" required>
+      </label>
+
+      <div class="fin-actions">
+        <button type="submit" class="btn-primary">Upload &amp; generate</button>
+      </div>
+      <span class="fin-hint">
+        Revenue = client income accounts (excludes Referral Fees:Email Feed and
+        Statement of Work). Replace-by-period: re-importing a month overwrites it.
+      </span>
+    </form>
+  </section>
+</div>
+
+{% if report and period %}
+<script>
+(function () {
+  var table = document.getElementById("biggest-clients-table");
+  if (!table) return;
+  var detailUrl = table.getAttribute("data-detail-url");
+  var period = table.getAttribute("data-period");
+  var colCount = table.querySelectorAll("thead th").length;
+  var cache = {};
+
+  function fmtNum(v, dp) {
+    if (v === null || v === undefined || v === "") return "—";
+    var n = Number(v);
+    if (isNaN(n)) return String(v);
+    if (dp === 0) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function esc(s) {
+    if (s === null || s === undefined) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderDetail(payload) {
+    var buckets = payload.buckets || [];
+    if (!buckets.length) {
+      return '<p class="fin-note" style="margin:0;">No income lines for this client in '
+        + esc(payload.period) + ".</p>";
+    }
+    var html = '<div class="fin-compare">'
+      + '<div class="fin-compare-meta">' + esc(payload.period) + "</div>"
+      + '<table class="fin-table fin-detail-table fin-compare-table"><thead><tr>'
+      + "<th>Income type</th><th>Product / Service</th>"
+      + '<th class="num">Certs</th><th class="num">Rate</th><th class="num">Amount</th>'
+      + '<th class="num">Lives*</th><th class="num">Premium*</th>'
+      + "</tr></thead><tbody>";
+    var i = 0;
+    while (i < buckets.length) {
+      var income = buckets[i].income_account;
+      var span = 1;
+      while (i + span < buckets.length && buckets[i + span].income_account === income) span++;
+      for (var j = 0; j < span; j++) {
+        var b = buckets[i + j];
+        html += "<tr>";
+        if (j === 0) {
+          html += '<td class="fin-income-cell" rowspan="' + span + '">' + esc(income) + "</td>";
+        }
+        html += "<td>" + esc(b.product_code || "(blank)") + "</td>"
+          + '<td class="num">' + fmtNum(b.certs, 0) + "</td>"
+          + '<td class="num">' + fmtNum(b.rate, 2) + "</td>"
+          + '<td class="num">' + fmtNum(b.amount, 2) + "</td>"
+          + '<td class="num">' + fmtNum(b.lives, 0) + "</td>"
+          + '<td class="num">' + fmtNum(b.premium, 0) + "</td>"
+          + "</tr>";
+      }
+      i += span;
+    }
+    html += "</tbody></table></div>";
+    return html;
+  }
+
+  function ensureDetailRow(summaryRow) {
+    var next = summaryRow.nextElementSibling;
+    if (next && next.classList.contains("fin-detail-row")) return next;
+    var detail = document.createElement("tr");
+    detail.className = "fin-detail-row";
+    detail.hidden = true;
+    detail.innerHTML = '<td colspan="' + colCount + '"><div class="fin-detail-panel">'
+      + '<p class="fin-note" style="margin:0;">Loading…</p></div></td>';
+    summaryRow.parentNode.insertBefore(detail, summaryRow.nextSibling);
+    return detail;
+  }
+
+  function setExpanded(row, open) {
+    row.classList.toggle("is-expanded", open);
+    row.setAttribute("aria-expanded", open ? "true" : "false");
+    var detail = ensureDetailRow(row);
+    detail.hidden = !open;
+  }
+
+  function loadDetail(row) {
+    var client = row.getAttribute("data-client");
+    var detail = ensureDetailRow(row);
+    var panel = detail.querySelector(".fin-detail-panel");
+    if (cache[client]) {
+      panel.innerHTML = renderDetail(cache[client]);
+      return;
+    }
+    panel.innerHTML = '<p class="fin-note" style="margin:0;">Loading…</p>';
+    var url = detailUrl + "?period=" + encodeURIComponent(period)
+      + "&client=" + encodeURIComponent(client);
+    fetch(url, { headers: { "Accept": "application/json" } })
+      .then(function (res) {
+        if (!res.ok) throw new Error("Request failed (" + res.status + ")");
+        return res.json();
+      })
+      .then(function (data) {
+        if (data.error) throw new Error(data.error);
+        cache[client] = data;
+        panel.innerHTML = renderDetail(data);
+      })
+      .catch(function (err) {
+        panel.innerHTML = '<p class="fin-note" style="margin:0;">Could not load detail: '
+          + esc(err.message || err) + "</p>";
+      });
+  }
+
+  function toggleRow(row) {
+    var open = row.getAttribute("aria-expanded") === "true";
+    if (open) {
+      setExpanded(row, false);
+      return;
+    }
+    setExpanded(row, true);
+    loadDetail(row);
+  }
+
+  table.addEventListener("click", function (e) {
+    var row = e.target.closest("tr.fin-expand-row");
+    if (!row || !table.contains(row)) return;
+    toggleRow(row);
+  });
+
+  table.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var row = e.target.closest("tr.fin-expand-row");
+    if (!row || !table.contains(row)) return;
+    e.preventDefault();
+    toggleRow(row);
+  });
+})();
+</script>
+{% endif %}
+
+{% endblock %}

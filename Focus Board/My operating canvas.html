@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My operating canvas</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #F5F8FC; --surface: #FFFFFF; --ink: #13283F; --muted: #5B6B82; --hint: #97A4B6; --line: #E3EAF3; --line2: #CFDAE8;
+    --do: #0C4A8B; --do-bg: #E3EEF9; --do-line: #AFCBE9;
+    --sched: #1567C2; --sched-bg: #E6F1FB; --sched-line: #BBD8F3;
+    --del: #2E86D6; --del-bg: #EAF3FC; --del-line: #C5E0F7;
+    --later: #5F7488; --later-bg: #EEF2F7; --later-line: #D3DDE9;
+    --proj: #3E5A74; --proj-bg: #EFF4F9; --proj-line: #D2DEEA;
+    --win: #0E5BAA; --win-bg: #E4EFFA; --win-line: #B7D4EE;
+    --radius: 12px; --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.45; padding: 22px; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 6px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; color: var(--do); }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .streak { text-align: right; }
+  .streak .big { font-size: 26px; font-weight: 600; color: var(--win); line-height: 1; }
+  .streak .lbl { font-size: 12px; color: var(--muted); }
+  .affirm { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--sched); border-radius: 8px; padding: 9px 13px; color: var(--muted); font-size: 13px; margin: 14px 0 18px; }
+  .affirm b { color: var(--ink); font-weight: 600; }
+  .capture { display: flex; gap: 8px; margin-bottom: 8px; }
+  .capture input { flex: 1; border: 1px solid var(--line2); border-radius: 9px; padding: 11px 13px; font-size: 14px; font-family: var(--font); background: var(--surface); color: var(--ink); }
+  .capture input:focus { outline: none; border-color: var(--sched); }
+  .capture button { border: none; background: var(--sched); color: #fff; border-radius: 9px; padding: 0 18px; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .inbox { background: var(--surface); border: 1px dashed var(--line2); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 18px; }
+  .inbox-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .inbox-head .ttl { font-weight: 600; font-size: 13px; color: var(--do); }
+  .inbox-head .ct { color: var(--hint); font-size: 12px; }
+  .inbox-empty, .q-empty, .wins-empty, .proj-empty { color: var(--hint); font-size: 12px; padding: 4px 2px; }
+  .icard { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 0; border-top: 1px solid var(--line); }
+  .icard:first-of-type { border-top: none; }
+  .icard .txt { flex: 1; min-width: 160px; }
+  .sortbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sortbtns button { border: 1px solid var(--line2); background: var(--surface); border-radius: 7px; padding: 4px 9px; font-size: 12px; cursor: pointer; color: var(--muted); font-family: var(--font); }
+  .sortbtns button.do:hover { background: var(--do-bg); color: var(--do); }
+  .sortbtns button.sched:hover { background: var(--sched-bg); color: var(--sched); }
+  .sortbtns button.del:hover { background: var(--del-bg); color: var(--del); }
+  .sortbtns button.later:hover { background: var(--later-bg); color: var(--later); }
+  .x { border: none; background: none; color: var(--hint); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
+  .matrix { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .quad { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; border-top: 3px solid var(--line2); }
+  .quad.do { border-top-color: var(--do); }
+  .quad.sched { border-top-color: var(--sched); }
+  .quad.del { border-top-color: var(--del); }
+  .quad.later { border-top-color: var(--later); }
+  .quad h2 { font-size: 14px; font-weight: 600; margin: 0; display: flex; align-items: baseline; gap: 8px; }
+  .quad .tag { font-size: 11px; font-weight: 400; color: var(--hint); }
+  .quad.do h2 { color: var(--do); }
+  .quad.sched h2 { color: var(--sched); }
+  .quad.del h2 { color: var(--del); }
+  .quad.later h2 { color: var(--later); }
+  .quad .desc { color: var(--muted); font-size: 12px; margin: 3px 0 10px; }
+  .tcard { display: flex; align-items: flex-start; gap: 9px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .tcard:first-of-type { border-top: none; }
+  .tcard .body { flex: 1; }
+  .tcard .txt { display: block; }
+  .note { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .focus { display: inline-block; font-size: 10px; font-weight: 600; color: #fff; background: var(--do); border-radius: 5px; padding: 1px 6px; margin-left: 6px; }
+  .check { flex-shrink: 0; width: 19px; height: 19px; border: 1.5px solid var(--line2); border-radius: 5px; background: var(--surface); cursor: pointer; margin-top: 1px; display: flex; align-items: center; justify-content: center; color: transparent; font-size: 12px; }
+  .check:hover { border-color: var(--win); color: var(--win-line); }
+  .menu { border: none; background: none; color: var(--hint); cursor: pointer; font-size: 14px; padding: 2px 4px; }
+  .projects { margin-top: 18px; background: var(--proj-bg); border: 1px solid var(--proj-line); border-radius: var(--radius); padding: 14px 16px; }
+  .projects h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; color: var(--proj); }
+  .projects .ps { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .pcard { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--proj-line); }
+  .pcard:first-of-type { border-top: none; }
+  .pcard .txt { flex: 1; min-width: 150px; }
+  .padd { display: flex; gap: 8px; margin-top: 10px; }
+  .padd input { flex: 1; border: 1px solid var(--line2); border-radius: 8px; padding: 8px 11px; font-size: 13px; font-family: var(--font); background: var(--surface); color: var(--ink); }
+  .padd button { border: 1px solid var(--proj-line); background: var(--surface); color: var(--proj); border-radius: 8px; padding: 0 14px; font-size: 13px; cursor: pointer; }
+  .wins { margin-top: 18px; background: var(--win-bg); border: 1px solid var(--win-line); border-radius: var(--radius); padding: 14px 16px; }
+  .wins h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; color: var(--win); }
+  .wins .ws { color: var(--win); opacity: .85; font-size: 12px; margin-bottom: 10px; }
+  .wcard { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--win-line); }
+  .wcard:first-of-type { border-top: none; }
+  .wcard .tick { color: var(--win); font-weight: 600; }
+  .wcard .txt { flex: 1; }
+  .wcard .when { font-size: 11px; color: var(--win); opacity: .7; }
+  .wcard .undo { border: none; background: none; color: var(--win); opacity: .6; cursor: pointer; font-size: 11px; }
+  .foot { text-align: center; color: var(--hint); font-size: 11px; margin-top: 20px; }
+  @media (max-width: 680px) { .matrix { grid-template-columns: 1fr; } body { padding: 16px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><h1>My operating canvas</h1><div class="sub" id="today"></div></div>
+    <div class="streak"><div class="big" id="weekCount">0</div><div class="lbl">finished this week</div></div>
+  </header>
+  <div class="affirm" id="affirm"></div>
+  <div class="capture">
+    <input id="capInput" type="text" placeholder="What's on your mind? Type it, hit enter — sort it later" autocomplete="off">
+    <button id="capBtn">Add</button>
+  </div>
+  <div class="inbox">
+    <div class="inbox-head"><span class="ttl">Inbox &mdash; unsorted</span><span class="ct" id="inboxCt"></span></div>
+    <div id="inboxList"></div>
+  </div>
+  <div class="matrix">
+    <div class="quad do"><h2>Do now <span class="tag">urgent + important</span></h2><div class="desc">The real fires and high-stakes work. Keep this short.</div><div id="q-do"></div></div>
+    <div class="quad sched"><h2>Schedule <span class="tag">important, not urgent</span></h2><div class="desc">Where the growth lives. Give these a time on the calendar.</div><div id="q-sched"></div></div>
+    <div class="quad del"><h2>Delegate <span class="tag">urgent, not important</span></h2><div class="desc">Someone else can carry these. Hand them off.</div><div id="q-del"></div></div>
+    <div class="quad later"><h2>Later / drop <span class="tag">not urgent, not important</span></h2><div class="desc">Park it or let it go. Be honest here.</div><div id="q-later"></div></div>
+  </div>
+  <div class="projects">
+    <h2>Projects &amp; standing areas</h2>
+    <div class="ps">Not daily tasks &mdash; ongoing responsibilities. Pull one next step from each into a bucket when it's time.</div>
+    <div id="projList"></div>
+    <div class="padd"><input id="projInput" type="text" placeholder="Add a project or standing area" autocomplete="off"><button id="projBtn">Add area</button></div>
+  </div>
+  <div class="wins">
+    <h2>Wins &mdash; what you've finished</h2>
+    <div class="ws" id="winsSummary"></div>
+    <div id="winsList"></div>
+  </div>
+  <div class="foot">Everything here saves automatically on this device.</div>
+</div>
+<script>
+(function(){
+  var KEY='operating_canvas_v8';
+  var SEED=[
+    {text:'Premium payment — booked in QBO + ATB file approved',bucket:'done',done:Date.now()},
+    {text:'Tax adjustments — remittance advices (Canada Life, AGI, RBC, Manulife)',bucket:'done',done:Date.now()},
+    {text:"Steve's Livestock — prep, meeting & follow-up",bucket:'done',done:Date.now()},
+    {text:'GSC ERL — root-caused, forward fix, BD variance sent to carrier',bucket:'done',done:Date.now()},
+    {text:'Payroll (EA + ED) — submitted',bucket:'done',done:Date.now()},
+    {text:'Review iASM remittance advice',bucket:'done',done:Date.now()},
+    {text:'Amend MBC remittance advice',bucket:'done',done:Date.now()},
+    {text:'PBC remittance advice — pivot macro built & tested',bucket:'done',done:Date.now()},
+    {text:'iASM Volume Breakdown macro — built & tested',bucket:'done',done:Date.now()},
+    {text:'Send remittance advice notice email',bucket:'done',done:Date.now()},
+    {text:'Send manual bill remittance advices',bucket:'done',done:Date.now()},
+    {text:'Payroll App built (BambooHR report pull, Flask + CLI) → moved to C:\, git-initialized',bucket:'done',done:Date.now()},
+    {text:'ISL — email to HUB',bucket:'do',note:'carried'},
+    {text:'CMRRA — email',bucket:'do',note:'carried'},
+    {text:'Accounting — trust account reconciliation',bucket:'sched',note:'start accounting'},
+    {text:'Accounting — bank recs',bucket:'sched'},
+    {text:'Accounting — booking vacations',bucket:'sched'},
+    {text:'Check "Equ" 60-day bill in QBO — $25.44 overpaid',bucket:'sched',note:'reconcile'},
+    {text:'GSC ERL historical — awaiting GreenShield reply',bucket:'sched',note:'BD variance sent 06-24'},
+    {text:'Month-end cluster — confirm status (RBC recs, Book Payroll, Month end)',bucket:'sched'},
+    {text:'Lindsay ASO transition',bucket:'sched',note:'was due 06/18'},
+    {text:'Address Updates',bucket:'sched',note:'was due 06/12'},
+    {text:'AgSafe — July switch adviser in GB',bucket:'sched',note:'due 07/02'},
+    {text:'Reconciliation db update / status quo',bucket:'sched'},
+    {text:'Mirror PBC pivot macro in Process Street — to-do + audit step',bucket:'sched',note:'standing automation rule'},
+    {text:'Mirror iASM Volume Breakdown macro in Process Street — to-do + audit step',bucket:'sched',note:'standing rule'},
+    {text:'Mirror BambooHR pull (Payroll App) in Process Street — to-do + audit',bucket:'sched',note:'standing rule'},
+    {text:'Dev-team DB query → intern to import',bucket:'del',note:'delegated'},
+    {text:'Remittance Project — status quo meeting',bucket:'project'},
+    {text:'Eye Recommend — carrier transition (heating up)',bucket:'project'},
+    {text:'Humanacare — remit to',bucket:'project'},
+    {text:'United Cycle',bucket:'project'},
+    {text:'CMRRA',bucket:'project'},
+    {text:'Travel Policy',bucket:'project'}
+  ];
+  var items=load();
+  function load(){
+    try{var r=localStorage.getItem(KEY);if(r){var p=JSON.parse(r);if(p&&p.length){return p;}}}catch(e){}
+    return SEED.map(function(s){return {id:uid(),text:s.text,bucket:s.bucket,note:s.note||'',flag:!!s.flag,created:Date.now(),done:s.done||null};});
+  }
+  function save(){try{localStorage.setItem(KEY,JSON.stringify(items));}catch(e){}}
+  function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
+  function add(text,bucket){text=(text||'').trim();if(!text)return;items.push({id:uid(),text:text,bucket:bucket||'inbox',note:'',flag:false,created:Date.now(),done:null});save();render();}
+  function setBucket(id,b){var it=find(id);if(it){it.bucket=b;save();render();}}
+  function complete(id){var it=find(id);if(it){it.bucket='done';it.done=Date.now();save();render();}}
+  function uncomplete(id){var it=find(id);if(it){it.bucket='inbox';it.done=null;save();render();}}
+  function remove(id){items=items.filter(function(i){return i.id!==id;});save();render();}
+  function find(id){for(var i=0;i<items.length;i++){if(items[i].id===id)return items[i];}return null;}
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function startOfWeek(){var d=new Date();var day=(d.getDay()+6)%7;d.setHours(0,0,0,0);d.setDate(d.getDate()-day);return d.getTime();}
+  function relDay(ts){var d=new Date(ts),now=new Date();var a=new Date(d.getFullYear(),d.getMonth(),d.getDate());var b=new Date(now.getFullYear(),now.getMonth(),now.getDate());var diff=Math.round((b-a)/86400000);if(diff===0)return 'today';if(diff===1)return 'yesterday';if(diff<7)return diff+' days ago';return d.toLocaleDateString(undefined,{month:'short',day:'numeric'});}
+  function noteHtml(it){return it.note?'<div class="note">'+esc(it.note)+'</div>':'';}
+  function focusHtml(it){return it.flag?'<span class="focus">focus</span>':'';}
+  function render(){
+    document.getElementById('today').textContent=new Date().toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});
+    var sow=startOfWeek();
+    var done=items.filter(function(i){return i.bucket==='done';}).sort(function(a,b){return b.done-a.done;});
+    var weekDone=done.filter(function(i){return i.done>=sow;}).length;
+    document.getElementById('weekCount').textContent=weekDone;
+    var af=document.getElementById('affirm');
+    var openCt=items.filter(function(i){return i.bucket!=='done'&&i.bucket!=='project';}).length;
+    var msg;
+    if(weekDone===0){msg='You have <b>'+openCt+'</b> active '+(openCt===1?'item':'items')+' in your buckets. Start with a focus item in Do now &mdash; finish one and watch this fill up.';}
+    else if(weekDone<3){msg='<b>'+weekDone+'</b> done already this week. Momentum is starting &mdash; keep the streak alive.';}
+    else {msg='<b>'+weekDone+'</b> finished this week. That is real progress &mdash; take a moment to feel it.';}
+    af.innerHTML=msg;
+    var inbox=items.filter(function(i){return i.bucket==='inbox';});
+    document.getElementById('inboxCt').textContent=inbox.length?inbox.length+' to sort':'';
+    document.getElementById('inboxList').innerHTML=inbox.length===0?'<div class="inbox-empty">Nothing waiting. Add a thought above, or it has all been sorted.</div>':inbox.map(function(it){return '<div class="icard"><span class="txt">'+esc(it.text)+'</span><span class="sortbtns"><button class="do" data-act="b" data-b="do" data-id="'+it.id+'">Do now</button><button class="sched" data-act="b" data-b="sched" data-id="'+it.id+'">Schedule</button><button class="del" data-act="b" data-b="del" data-id="'+it.id+'">Delegate</button><button class="later" data-act="b" data-b="later" data-id="'+it.id+'">Later</button></span><button class="x" data-act="rm" data-id="'+it.id+'">&times;</button></div>';}).join('');
+    renderQuad('q-do','do');renderQuad('q-sched','sched');renderQuad('q-del','del');renderQuad('q-later','later');
+    renderProjects();
+    var ws=document.getElementById('winsSummary');
+    ws.textContent=done.length?(done.length+' finished in total · '+weekDone+' this week'):'';
+    document.getElementById('winsList').innerHTML=done.length===0?'<div class="wins-empty">Nothing here yet. Tick the box on any task and it lands here as a win.</div>':done.slice(0,50).map(function(it){return '<div class="wcard"><span class="tick">✓</span><span class="txt">'+esc(it.text)+'</span><span class="when">'+relDay(it.done)+'</span><button class="undo" data-act="undo" data-id="'+it.id+'">undo</button></div>';}).join('');
+    save();
+  }
+  function renderQuad(elId,bucket){
+    var list=items.filter(function(i){return i.bucket===bucket;});
+    var el=document.getElementById(elId);
+    if(list.length===0){el.innerHTML='<div class="q-empty">&mdash;</div>';return;}
+    el.innerHTML=list.map(function(it){return '<div class="tcard"><span class="check" data-act="done" data-id="'+it.id+'">✓</span><span class="body"><span class="txt">'+esc(it.text)+focusHtml(it)+'</span>'+noteHtml(it)+'</span><button class="menu" data-act="back" data-id="'+it.id+'">↩</button></div>';}).join('');
+  }
+  function renderProjects(){
+    var list=items.filter(function(i){return i.bucket==='project';});
+    var el=document.getElementById('projList');
+    el.innerHTML=list.length===0?'<div class="proj-empty">No standing areas yet.</div>':list.map(function(it){return '<div class="pcard"><span class="txt">'+esc(it.text)+'</span><span class="sortbtns"><button class="do" data-act="b" data-b="do" data-id="'+it.id+'">Do now</button><button class="sched" data-act="b" data-b="sched" data-id="'+it.id+'">Schedule</button><button class="del" data-act="b" data-b="del" data-id="'+it.id+'">Delegate</button><button class="later" data-act="b" data-b="later" data-id="'+it.id+'">Later</button></span><button class="x" data-act="rm" data-id="'+it.id+'">&times;</button></div>';}).join('');
+  }
+  document.getElementById('capBtn').addEventListener('click',function(){var i=document.getElementById('capInput');add(i.value);i.value='';i.focus();});
+  document.getElementById('capInput').addEventListener('keydown',function(e){if(e.key==='Enter'){add(this.value);this.value='';}});
+  document.getElementById('projBtn').addEventListener('click',function(){var i=document.getElementById('projInput');add(i.value,'project');i.value='';i.focus();});
+  document.getElementById('projInput').addEventListener('keydown',function(e){if(e.key==='Enter'){add(this.value,'project');this.value='';}});
+  document.body.addEventListener('click',function(e){var t=e.target.closest('[data-act]');if(!t)return;var act=t.getAttribute('data-act'),id=t.getAttribute('data-id');if(act==='b')setBucket(id,t.getAttribute('data-b'));else if(act==='rm')remove(id);else if(act==='done')complete(id);else if(act==='back')setBucket(id,'inbox');else if(act==='undo')uncomplete(id);});
+  render();
+})();
+</script>
+</body>
+</html>

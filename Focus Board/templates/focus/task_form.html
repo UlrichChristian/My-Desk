@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if task else 'New' }} Task — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('focus.static', filename='focus/focus.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="form-page">
+  <div class="form-card">
+    <h2 class="form-title">{{ 'Edit Task' if task else 'New Task' }}</h2>
+
+    <form method="post" id="task-edit-form">
+      <div class="form-group">
+        <label for="title">Title *</label>
+        <input type="text" id="title" name="title"
+               value="{{ task['title'] if task else '' }}"
+               required autofocus class="form-input">
+      </div>
+
+      <div class="form-group">
+        <label for="description">Notes</label>
+        <textarea id="description" name="description"
+                  rows="3" class="form-input">{{ task['description'] if task and task['description'] else '' }}</textarea>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="size">Effort</label>
+          <select id="size" name="size" class="form-select">
+            {% for sz, label in [('small', 'Small'), ('medium', 'Med'), ('big', 'Large')] %}
+            <option value="{{ sz }}"
+              {% if task and task['size'] == sz %}selected{% elif sz == 'medium' and not task %}selected{% endif %}>
+              {{ label }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="due_date">Due Date</label>
+          <input type="date" id="due_date" name="due_date"
+                 value="{{ task['due_date'] if task and task['due_date'] else '' }}"
+                 class="form-input">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="parent_category_id">Category</label>
+          <select id="parent_category_id" name="parent_category_id" class="form-select">
+            <option value="">— none —</option>
+            {% for cat in parent_categories %}
+            <option value="{{ cat['id'] }}"
+              {% if current_parent_id == cat['id'] %}selected{% endif %}>
+              {{ cat['name'] }}
+            </option>
+            {% endfor %}
+            <option value="__new__">➕ New category…</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="category_id">Subcategory</label>
+          <select id="category_id" name="category_id" class="form-select">
+            <option value="">— none —</option>
+            {% for cat in categories %}
+              {% if cat['parent_id'] %}
+            <option value="{{ cat['id'] }}" data-parent="{{ cat['parent_id'] }}" hidden
+              {% if current_child_id == cat['id'] %}selected{% endif %}>
+              {{ cat['name'] }}
+            </option>
+              {% endif %}
+            {% endfor %}
+            <option value="__new__">➕ New subcategory…</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group" id="new-cat-group" style="display:none">
+        <label for="new_category">New Category Name</label>
+        <input type="text" id="new_category" name="new_category" class="form-input">
+        <div class="swatch-picker" style="margin-top:8px">
+          {% for sw in palette %}
+          <label class="swatch-option" title="{{ sw['label'] }}">
+            <input type="radio" name="new_category_color" value="{{ sw['hex'] }}"
+                   {% if loop.first %}checked{% endif %}>
+            <span class="swatch-dot" style="background:{{ sw['hex'] }}"></span>
+          </label>
+          {% endfor %}
+        </div>
+        <select name="new_category_frame_style" class="form-select" style="margin-top:8px">
+          {% for fs in frame_styles %}
+          <option value="{{ fs }}">{{ fs|capitalize }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group" id="new-sub-group" style="display:none">
+        <label for="new_subcategory">New Subcategory Name</label>
+        <input type="text" id="new_subcategory" name="new_subcategory" class="form-input">
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="project_id">Project</label>
+          <select id="project_id" name="project_id" class="form-select">
+            <option value="">— none —</option>
+            {% for proj in projects %}
+            <option value="{{ proj['id'] }}"
+              {% if task and task['project_id'] == proj['id'] %}selected{% endif %}>
+              {{ proj['name'] }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="parent_id">Parent task</label>
+          {% if has_subtasks %}
+          <p class="form-static">— none — (has subtasks)</p>
+          <p class="form-hint">Tasks with subtasks cannot be assigned to a parent.</p>
+          {% else %}
+          <select id="parent_id" name="parent_id" class="form-select">
+            <option value="">— none —</option>
+            {% for pt in parent_tasks %}
+            <option value="{{ pt['id'] }}"
+              {% if task and task['parent_id'] == pt['id'] %}selected{% endif %}>
+              {{ pt['title'] }}
+            </option>
+            {% endfor %}
+          </select>
+          <p class="form-hint">Make this a subtask of another top-level task.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Accent colour</label>
+          <div class="swatch-picker">
+            <label class="swatch-option swatch-inherit" title="Inherit from category">
+              <input type="radio" name="accent_color" value="__inherit__"
+                {% if not task or not task.get('accent_color') %}checked{% endif %}>
+              <span class="swatch-dot swatch-dot-inherit">—</span>
+            </label>
+            {% for sw in palette %}
+            <label class="swatch-option" title="{{ sw['label'] }}">
+              <input type="radio" name="accent_color" value="{{ sw['hex'] }}"
+                {% if task and task.get('accent_color') == sw['hex'] %}checked{% endif %}>
+              <span class="swatch-dot" style="background:{{ sw['hex'] }}"></span>
+            </label>
+            {% endfor %}
+          </div>
+          <p class="form-hint">Overrides category colour for the task frame.</p>
+        </div>
+        <div class="form-group">
+          <label class="flag-chip form-flag">
+            <input type="checkbox" name="procrastinate"
+              {% if task and task.get('procrastinate') %}checked{% endif %}>
+            Procrastination risk
+          </label>
+          <p class="form-hint">Shows an inner red frame as a visual reminder.</p>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="flag-chip form-flag">
+            <input type="checkbox" name="is_recurring"
+              {% if task and task['is_recurring'] %}checked{% endif %}>
+            Recurring template
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="flag-chip form-flag">
+          <input type="checkbox" name="archived"
+            {% if task and task['status'] == 'archived' %}checked{% endif %}>
+          Archive task
+        </label>
+        <p class="form-hint">Archived tasks are hidden from the board but kept in the database.</p>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">Save</button>
+        <a href="{{ url_for('focus.board') }}" class="btn-cancel-link">Cancel</a>
+      </div>
+    </form>
+  </div>
+
+  {% if task and task.get('id') %}
+  <div class="form-card" id="time-log-card" data-task-id="{{ task['id'] }}">
+    <h2 class="form-title">Time log <span id="time-total" class="time-total"></span></h2>
+    <ul class="time-entry-list" id="time-entry-list"></ul>
+    <p class="form-hint" id="time-empty" style="display:none">No time logged yet.</p>
+
+    <div class="time-add-row">
+      <div class="form-group">
+        <label for="new_start">Start</label>
+        <input type="datetime-local" id="new_start" class="form-input">
+      </div>
+      <div class="form-group">
+        <label for="new_end">End</label>
+        <input type="datetime-local" id="new_end" class="form-input">
+      </div>
+      <button type="button" class="btn-primary" id="time-add-btn">Add time</button>
+    </div>
+    <p class="form-error" id="time-error" style="display:none"></p>
+    <p class="form-hint">Times shown and entered in your local timezone.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const parentSel = document.getElementById('parent_category_id');
+const subSel = document.getElementById('category_id');
+const newCatGroup = document.getElementById('new-cat-group');
+const newSubGroup = document.getElementById('new-sub-group');
+
+function filterSubcategories() {
+  const pid = parentSel.value;
+  const isNewParent = pid === '__new__';
+  if (newCatGroup) newCatGroup.style.display = isNewParent ? '' : 'none';
+  subSel.querySelectorAll('option[data-parent]').forEach(function(opt) {
+    opt.hidden = isNewParent || !pid || opt.dataset.parent !== pid;
+  });
+  if (!pid || isNewParent) subSel.value = '';
+  if (newSubGroup && subSel.value !== '__new__') newSubGroup.style.display = 'none';
+}
+
+parentSel.addEventListener('change', filterSubcategories);
+subSel.addEventListener('change', function() {
+  newSubGroup.style.display = this.value === '__new__' ? '' : 'none';
+});
+filterSubcategories();
+
+// ── Time log: history + manual add / edit / delete ──────────────────────────
+(function() {
+  const card = document.getElementById('time-log-card');
+  if (!card) return;
+  const taskId = card.dataset.taskId;
+  const listEl = document.getElementById('time-entry-list');
+  const totalEl = document.getElementById('time-total');
+  const emptyEl = document.getElementById('time-empty');
+  const errEl = document.getElementById('time-error');
+  const startInp = document.getElementById('new_start');
+  const endInp = document.getElementById('new_end');
+  const pad = n => String(n).padStart(2, '0');
+
+  function fmtDur(secs) {
+    const h = Math.floor(secs / 3600), m = Math.round((secs % 3600) / 60);
+    return (h ? h + 'h ' : '') + m + 'm';
+  }
+  // UTC ISO → value for <input type=datetime-local> (local wall-clock)
+  function isoToLocalInput(iso) {
+    const d = new Date(iso);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+           'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  // UTC ISO → friendly local display
+  function isoToDisplay(iso) {
+    return new Date(iso).toLocaleString([], {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+    });
+  }
+  // local datetime-local value → UTC ISO with trailing Z
+  function localInputToIso(val) {
+    if (!val) return null;
+    return new Date(val).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+  function showErr(msg) {
+    errEl.textContent = msg || '';
+    errEl.style.display = msg ? '' : 'none';
+  }
+  function postJson(url, body) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    }).then(r => r.json().then(j => ({ ok: r.ok, j })));
+  }
+
+  function render(data) {
+    listEl.innerHTML = '';
+    const secs = data.total_seconds || 0;
+    totalEl.textContent = secs > 0 ? '· ' + fmtDur(secs) : '';
+    emptyEl.style.display = data.entries.length ? 'none' : '';
+    data.entries.forEach(function(e) {
+      const li = document.createElement('li');
+      li.className = 'time-entry';
+      const when = document.createElement('span');
+      when.className = 'time-entry-when';
+      when.textContent = isoToDisplay(e.started_at) + ' → ' + isoToDisplay(e.ended_at);
+      const dur = document.createElement('span');
+      dur.className = 'time-entry-dur';
+      dur.textContent = fmtDur(e.duration_seconds);
+      const actions = document.createElement('span');
+      actions.className = 'time-entry-actions';
+      const edit = document.createElement('button');
+      edit.type = 'button'; edit.className = 'time-btn'; edit.textContent = 'Edit';
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'time-btn time-btn-danger'; del.textContent = 'Delete';
+      edit.addEventListener('click', () => editEntry(li, e));
+      del.addEventListener('click', () => delEntry(e.id));
+      actions.append(edit, del);
+      li.append(when, dur, actions);
+      listEl.appendChild(li);
+    });
+  }
+
+  function load() {
+    showErr('');
+    return fetch('/focus/task/' + taskId + '/time').then(r => r.json()).then(render);
+  }
+
+  function delEntry(id) {
+    postJson('/focus/time/' + id + '/delete').then(load);
+  }
+
+  function editEntry(li, e) {
+    li.innerHTML = '';
+    li.classList.add('editing');
+    const s = document.createElement('input');
+    s.type = 'datetime-local'; s.className = 'form-input'; s.value = isoToLocalInput(e.started_at);
+    const en = document.createElement('input');
+    en.type = 'datetime-local'; en.className = 'form-input'; en.value = isoToLocalInput(e.ended_at);
+    const save = document.createElement('button');
+    save.type = 'button'; save.className = 'time-btn'; save.textContent = 'Save';
+    const cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'time-btn'; cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', load);
+    save.addEventListener('click', function() {
+      showErr('');
+      postJson('/focus/time/' + e.id + '/edit', {
+        started_at: localInputToIso(s.value), ended_at: localInputToIso(en.value)
+      }).then(function(res) {
+        if (!res.ok || !res.j.ok) { showErr(res.j.error || 'Could not save.'); return; }
+        load();
+      });
+    });
+    li.append(s, en, save, cancel);
+  }
+
+  document.getElementById('time-add-btn').addEventListener('click', function() {
+    showErr('');
+    const s = localInputToIso(startInp.value), en = localInputToIso(endInp.value);
+    if (!s || !en) { showErr('Enter both a start and an end time.'); return; }
+    postJson('/focus/task/' + taskId + '/time/add', { started_at: s, ended_at: en })
+      .then(function(res) {
+        if (!res.ok || !res.j.ok) { showErr(res.j.error || 'Could not add entry.'); return; }
+        startInp.value = ''; endInp.value = ''; load();
+      });
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

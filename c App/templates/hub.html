@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}My Desk{% endblock %}
+{% block content %}
+
+<div class="hub-greeting">
+  <h1>Good
+    {% set hour = now_hour %}
+    {% if hour < 12 %}morning{% elif hour < 17 %}afternoon{% else %}evening{% endif %},
+    {{ session.display_name.split()[0] }}.
+  </h1>
+  <p class="lead">Your workspace. Pick an app to get started.</p>
+</div>
+
+<div class="cards">
+  {% for app in apps %}
+    {% if app.href %}
+    <a class="card" href="{{ app.href }}">
+    {% else %}
+    <div class="card card-disabled">
+    {% endif %}
+      <span class="card-icon"><i class="fa-solid {{ app.icon }}"></i></span>
+      <h2>{{ app.name }}</h2>
+      <p>{{ app.blurb }}</p>
+      <span class="card-cta">
+        {% if app.href %}
+          Open <i class="fa-solid fa-arrow-right" style="font-size:8.5pt"></i>
+        {% else %}
+          <span class="coming-soon">Coming soon</span>
+        {% endif %}
+      </span>
+    {% if app.href %}
+    </a>
+    {% else %}
+    </div>
+    {% endif %}
+  {% endfor %}
+</div>
+
+{% endblock %}

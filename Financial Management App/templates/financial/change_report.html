@@ -1,0 +1,406 @@
+{% extends "base.html" %}
+{% block title %}Monthly Change Report — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('financial.static', filename='financial/financial.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="fin-header">
+  <a class="fin-back" href="{{ url_for('financial.home') }}">
+    <i class="fa-solid fa-arrow-left"></i> Financial Management
+  </a>
+  <h1>Monthly Change Report</h1>
+  <p class="lead">
+    Month-over-month revenue bridge — new and lost clients, plus certs (quantity),
+    price (admin fee), and benefits (product lines) for existing clients.
+    Uses the latest revenue import from Biggest Clients.
+  </p>
+</div>
+
+{% if period %}
+<section class="fin-panel">
+  <div class="fin-report-bar">
+    <form method="get" class="fin-field" style="flex-direction:row; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span class="fin-label">Month</span>
+      <select name="period" class="fin-select" onchange="this.form.submit()">
+        {% for p in periods %}
+        <option value="{{ p }}" {% if p == period %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+      <span class="fin-label">vs</span>
+      <select name="prior" class="fin-select" onchange="this.form.submit()">
+        {% for p in prior_options %}
+        <option value="{{ p }}" {% if p == prior_period %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit" class="btn-secondary">Show</button></noscript>
+    </form>
+    <a class="btn-secondary" href="{{ url_for('financial.change_report_export', period=period, prior=prior_period) }}">
+      <i class="fa-solid fa-file-excel"></i> Export Excel
+    </a>
+  </div>
+
+  <div class="fin-summary-strip">
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Current ({{ summary.period_label }})</span>
+      <span class="fin-summary-value">{{ summary.current_revenue_fmt }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Prior ({{ summary.prior_label }})</span>
+      <span class="fin-summary-value">{{ summary.prior_revenue_fmt }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Δ Revenue</span>
+      <span class="fin-summary-value {{ summary.delta_cls }}">{{ summary.delta_fmt }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">New</span>
+      <span class="fin-summary-value">{{ summary.new_fmt }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Lost</span>
+      <span class="fin-summary-value">{{ summary.lost_fmt }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Certs</span>
+      <span class="fin-summary-value">{{ summary.certs_fmt }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Price</span>
+      <span class="fin-summary-value">{{ summary.price_fmt }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Benefits</span>
+      <span class="fin-summary-value">{{ summary.benefits_fmt }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Other</span>
+      <span class="fin-summary-value">{{ summary.other_fmt }}</span>
+    </div>
+  </div>
+
+  <p class="fin-note" style="margin-top:0;">
+    Click a column header to sort. Click a client row to compare products
+    prior → current (grouped by income type).
+  </p>
+
+  <div class="fin-report-scroll">
+    <table class="fin-table fin-table-expandable" id="change-report-table"
+           data-detail-url="{{ detail_url }}"
+           data-period="{{ period }}"
+           data-prior="{{ prior_period }}">
+      <thead>
+        <tr>
+          <th class="fin-sortable" data-sort="text" data-col="0" scope="col" tabindex="0" role="columnheader" aria-sort="none">Client</th>
+          <th class="fin-sortable" data-sort="text" data-col="1" scope="col" tabindex="0" role="columnheader" aria-sort="none">Advisor</th>
+          <th class="fin-sortable num" data-sort="num" data-col="2" scope="col" tabindex="0" role="columnheader" aria-sort="none">Current</th>
+          <th class="fin-sortable num" data-sort="num" data-col="3" scope="col" tabindex="0" role="columnheader" aria-sort="none">Prior</th>
+          <th class="fin-sortable num" data-sort="num" data-col="4" scope="col" tabindex="0" role="columnheader" aria-sort="none">Δ</th>
+          <th class="fin-sortable num" data-sort="num" data-col="5" scope="col" tabindex="0" role="columnheader" aria-sort="none">New</th>
+          <th class="fin-sortable num" data-sort="num" data-col="6" scope="col" tabindex="0" role="columnheader" aria-sort="none">Lost</th>
+          <th class="fin-sortable num" data-sort="num" data-col="7" scope="col" tabindex="0" role="columnheader" aria-sort="none">Certs</th>
+          <th class="fin-sortable num" data-sort="num" data-col="8" scope="col" tabindex="0" role="columnheader" aria-sort="none">Price</th>
+          <th class="fin-sortable num" data-sort="num" data-col="9" scope="col" tabindex="0" role="columnheader" aria-sort="none">Benefits</th>
+          <th class="fin-sortable num" data-sort="num" data-col="10" scope="col" tabindex="0" role="columnheader" aria-sort="none">Other</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="fin-expand-row" data-client="{{ r.client }}" tabindex="0" role="button"
+            aria-expanded="false"
+            data-v0="{{ r.client }}"
+            data-v1="{{ r.advisor }}"
+            data-v2="{{ r.current_v }}"
+            data-v3="{{ r.prior_v }}"
+            data-v4="{{ r.delta_v }}"
+            data-v5="{{ r.new_v }}"
+            data-v6="{{ r.lost_v }}"
+            data-v7="{{ r.certs_v }}"
+            data-v8="{{ r.price_v }}"
+            data-v9="{{ r.benefits_v }}"
+            data-v10="{{ r.other_v }}">
+          <td>
+            <span class="fin-expand-toggle" aria-hidden="true">
+              <i class="fa-solid fa-chevron-right"></i>
+            </span>
+            {{ r.client }}
+          </td>
+          <td>{{ r.advisor }}</td>
+          <td class="num">{{ r.current }}</td>
+          <td class="num">{{ r.prior }}</td>
+          <td class="num {{ r.delta_cls }}">{{ r.delta }}</td>
+          <td class="num">{{ r.new }}</td>
+          <td class="num">{{ r.lost }}</td>
+          <td class="num">{{ r.certs }}</td>
+          <td class="num">{{ r.price }}</td>
+          <td class="num">{{ r.benefits }}</td>
+          <td class="num">{{ r.other }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% else %}
+<section class="fin-panel">
+  <p class="fin-note">
+    No month-over-month data yet. Import a rolling drilldown on
+    <a href="{{ url_for('financial.biggest_clients') }}">Biggest Clients</a>
+    so at least two consecutive months are in the database.
+  </p>
+</section>
+{% endif %}
+
+<section class="fin-panel" style="margin-top:24px;">
+  <h2><i class="fa-solid fa-circle-info"></i> How drivers are calculated</h2>
+  <ul class="fin-steps">
+    <li><strong>New</strong> — client present this month, absent last month (all current revenue).</li>
+    <li><strong>Lost</strong> — client present last month, absent this month (−prior revenue).</li>
+    <li><strong>Certs</strong> — same client + product: (Δ quantity) × prior rate.</li>
+    <li><strong>Price</strong> — same client + product: current quantity × (Δ rate).</li>
+    <li><strong>Benefits</strong> — product lines added or dropped for an existing client.</li>
+    <li><strong>Other</strong> — lines missing quantity/rate, or amount residual vs qty×rate.</li>
+  </ul>
+  <p class="fin-note">
+    Excludes Referral Fees:Email Feed and Statement of Work (not client revenue).
+  </p>
+  {% if state.last_import %}
+  <p class="fin-note">
+    Last import <strong>#{{ state.last_import.import_id }}</strong>
+    on {{ state.last_import.uploaded_at }}
+    {% if state.last_import.drilldown_from %}
+      (covering {{ state.last_import.drilldown_from }} →
+      {{ state.last_import.drilldown_to }}){% endif %}.
+  </p>
+  {% endif %}
+  <p class="fin-audit">
+    <i class="fa-solid fa-clipboard-check"></i>
+    Process Street: mirror each monthly review with a to-do step and an audit step.
+  </p>
+</section>
+
+{% if period %}
+<script>
+(function () {
+  var table = document.getElementById("change-report-table");
+  if (!table) return;
+  var detailUrl = table.getAttribute("data-detail-url");
+  var period = table.getAttribute("data-period");
+  var prior = table.getAttribute("data-prior");
+  var colCount = table.querySelectorAll("thead th").length;
+  var cache = {};
+
+  function fmtNum(v, dp) {
+    if (v === null || v === undefined || v === "") return "—";
+    var n = Number(v);
+    if (isNaN(n)) return String(v);
+    if (dp === 0) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function fmtArrow(prior, curr, dp) {
+    var left = fmtNum(prior, dp);
+    var right = fmtNum(curr, dp);
+    if (left === "—" && right === "—") return "—";
+    var cls = "";
+    var pn = Number(prior), cn = Number(curr);
+    if (!isNaN(pn) && !isNaN(cn)) {
+      if (cn > pn) cls = " fin-arrow-up";
+      else if (cn < pn) cls = " fin-arrow-down";
+      else cls = " fin-arrow-flat";
+    }
+    return '<span class="fin-arrow' + cls + '">'
+      + '<span class="fin-arrow-prior">' + left + "</span>"
+      + '<span class="fin-arrow-sep" aria-hidden="true">→</span>'
+      + '<span class="fin-arrow-curr">' + right + "</span>"
+      + "</span>";
+  }
+
+  function esc(s) {
+    if (s === null || s === undefined) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderDetail(payload) {
+    var buckets = payload.buckets || [];
+    if (!buckets.length) {
+      return '<p class="fin-note" style="margin:0;">No income lines for this client in '
+        + esc(payload.prior_period) + " / " + esc(payload.period) + ".</p>";
+    }
+    var html = '<div class="fin-compare">'
+      + '<div class="fin-compare-meta">'
+      + esc(payload.prior_period) + " → " + esc(payload.period)
+      + "</div>"
+      + '<table class="fin-table fin-detail-table fin-compare-table"><thead><tr>'
+      + "<th>Income type</th><th>Product / Service</th>"
+      + "<th>Certs</th><th>Rate</th><th>Amount</th>"
+      + "</tr></thead><tbody>";
+    var i = 0;
+    while (i < buckets.length) {
+      var income = buckets[i].income_account;
+      var span = 1;
+      while (i + span < buckets.length && buckets[i + span].income_account === income) span++;
+      for (var j = 0; j < span; j++) {
+        var b = buckets[i + j];
+        var p = b.prior || {};
+        var c = b.current || {};
+        html += "<tr>";
+        if (j === 0) {
+          html += '<td class="fin-income-cell" rowspan="' + span + '">' + esc(income) + "</td>";
+        }
+        html += "<td>" + esc(b.product_code || "(blank)") + "</td>"
+          + "<td>" + fmtArrow(p.certs, c.certs, 0) + "</td>"
+          + "<td>" + fmtArrow(p.rate, c.rate, 2) + "</td>"
+          + "<td>" + fmtArrow(p.amount, c.amount, 2) + "</td>"
+          + "</tr>";
+      }
+      i += span;
+    }
+    html += "</tbody></table></div>";
+    return html;
+  }
+
+  function ensureDetailRow(summaryRow) {
+    var next = summaryRow.nextElementSibling;
+    if (next && next.classList.contains("fin-detail-row")) return next;
+    var detail = document.createElement("tr");
+    detail.className = "fin-detail-row";
+    detail.hidden = true;
+    detail.innerHTML = '<td colspan="' + colCount + '"><div class="fin-detail-panel">'
+      + '<p class="fin-note" style="margin:0;">Loading…</p></div></td>';
+    summaryRow.parentNode.insertBefore(detail, summaryRow.nextSibling);
+    return detail;
+  }
+
+  function setExpanded(row, open) {
+    row.classList.toggle("is-expanded", open);
+    row.setAttribute("aria-expanded", open ? "true" : "false");
+    var detail = ensureDetailRow(row);
+    detail.hidden = !open;
+  }
+
+  function loadDetail(row) {
+    var client = row.getAttribute("data-client");
+    var detail = ensureDetailRow(row);
+    var panel = detail.querySelector(".fin-detail-panel");
+    if (cache[client]) {
+      panel.innerHTML = renderDetail(cache[client]);
+      return;
+    }
+    panel.innerHTML = '<p class="fin-note" style="margin:0;">Loading…</p>';
+    var url = detailUrl + "?period=" + encodeURIComponent(period)
+      + "&prior=" + encodeURIComponent(prior || "")
+      + "&client=" + encodeURIComponent(client);
+    fetch(url, { headers: { "Accept": "application/json" } })
+      .then(function (res) {
+        if (!res.ok) throw new Error("Request failed (" + res.status + ")");
+        return res.json();
+      })
+      .then(function (data) {
+        if (data.error) throw new Error(data.error);
+        cache[client] = data;
+        panel.innerHTML = renderDetail(data);
+      })
+      .catch(function (err) {
+        panel.innerHTML = '<p class="fin-note" style="margin:0;">Could not load detail: '
+          + esc(err.message || err) + "</p>";
+      });
+  }
+
+  function toggleRow(row) {
+    var open = row.getAttribute("aria-expanded") === "true";
+    if (open) {
+      setExpanded(row, false);
+      return;
+    }
+    setExpanded(row, true);
+    loadDetail(row);
+  }
+
+  table.addEventListener("click", function (e) {
+    var sortTh = e.target.closest("th.fin-sortable");
+    if (sortTh && table.contains(sortTh)) {
+      sortByHeader(sortTh);
+      return;
+    }
+    var row = e.target.closest("tr.fin-expand-row");
+    if (!row || !table.contains(row)) return;
+    toggleRow(row);
+  });
+
+  table.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var sortTh = e.target.closest("th.fin-sortable");
+    if (sortTh && table.contains(sortTh)) {
+      e.preventDefault();
+      sortByHeader(sortTh);
+      return;
+    }
+    var row = e.target.closest("tr.fin-expand-row");
+    if (!row || !table.contains(row)) return;
+    e.preventDefault();
+    toggleRow(row);
+  });
+
+  var sortState = { col: null, dir: "desc" };
+
+  function sortByHeader(th) {
+    var col = th.getAttribute("data-col");
+    var type = th.getAttribute("data-sort") || "text";
+    if (sortState.col === col) {
+      sortState.dir = sortState.dir === "asc" ? "desc" : "asc";
+    } else {
+      sortState.col = col;
+      sortState.dir = type === "num" ? "desc" : "asc";
+    }
+    var headers = table.querySelectorAll("thead th.fin-sortable");
+    for (var h = 0; h < headers.length; h++) {
+      headers[h].setAttribute("aria-sort", "none");
+      headers[h].classList.remove("is-sorted-asc", "is-sorted-desc");
+    }
+    th.setAttribute("aria-sort", sortState.dir === "asc" ? "ascending" : "descending");
+    th.classList.add(sortState.dir === "asc" ? "is-sorted-asc" : "is-sorted-desc");
+
+    var tbody = table.tBodies[0];
+    var groups = [];
+    var children = Array.prototype.slice.call(tbody.children);
+    for (var i = 0; i < children.length; i++) {
+      var tr = children[i];
+      if (!tr.classList.contains("fin-expand-row")) continue;
+      var detail = children[i + 1] && children[i + 1].classList.contains("fin-detail-row")
+        ? children[i + 1]
+        : null;
+      groups.push({ row: tr, detail: detail });
+    }
+
+    var attr = "data-v" + col;
+    var dir = sortState.dir === "asc" ? 1 : -1;
+    groups.sort(function (a, b) {
+      var av = a.row.getAttribute(attr) || "";
+      var bv = b.row.getAttribute(attr) || "";
+      if (type === "num") {
+        var an = parseFloat(av);
+        var bn = parseFloat(bv);
+        if (isNaN(an)) an = 0;
+        if (isNaN(bn)) bn = 0;
+        return (an - bn) * dir;
+      }
+      return av.toLowerCase().localeCompare(bv.toLowerCase()) * dir;
+    });
+
+    for (var g = 0; g < groups.length; g++) {
+      tbody.appendChild(groups[g].row);
+      if (groups[g].detail) tbody.appendChild(groups[g].detail);
+    }
+  }
+})();
+</script>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Pull Accounts — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('financial.static', filename='financial/financial.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="fin-header">
+  <a class="fin-back" href="{{ url_for('financial.home') }}">
+    <i class="fa-solid fa-arrow-left"></i> Financial Management
+  </a>
+  <h1>Pull Accounts</h1>
+  <p class="lead">
+    Pull the current account list — lives, premium, advisor — from the EA admin site
+    into a CSV that feeds the revenue reports.
+  </p>
+</div>
+
+<div class="fin-layout">
+  <section class="fin-panel fin-instructions">
+    <h2><i class="fa-solid fa-circle-info"></i> What this does</h2>
+    <ul class="fin-bullets">
+      <li>Opens the EA admin site in Edge (you log in manually).</li>
+      <li>Queries the accounts API and pages through <strong>all clients</strong>
+          (Active, Terminated, and Updating) — full field set, including advisor and
+          consulting house.</li>
+      <li>Saves the result as a CSV for the <a href="{{ url_for('financial.biggest_clients') }}">Biggest Clients</a> import.</li>
+    </ul>
+    <p class="fin-note">
+      Read-only — this only reads the accounts API; nothing on the admin site changes.
+    </p>
+    <p class="fin-audit">
+      <i class="fa-solid fa-clipboard-check"></i>
+      Process Street: mirror this pull with a to-do step and an audit step.
+    </p>
+  </section>
+
+  <section class="fin-panel fin-form-panel">
+    <h2><i class="fa-solid fa-play"></i> Run pull</h2>
+    <form method="post" class="fin-form">
+      <div class="fin-actions">
+        <button type="submit" class="btn-primary">Launch accounts pull</button>
+      </div>
+      <span class="fin-hint">
+        Opens a new console window and an Edge browser. Log in to the EA admin site,
+        make sure the accounts grid is showing, then press Enter in the console. The CSV
+        is saved under <code>uploads/</code> when the scrape finishes.
+      </span>
+    </form>
+  </section>
+</div>
+
+{% endblock %}
