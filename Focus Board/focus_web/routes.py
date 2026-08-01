@@ -376,8 +376,9 @@ def add_task():
         else:
             placed = 0
     else:
-        # Important/urgent are flags only — new tasks land in Pipeline.
-        placed = 0
+        # Important/urgent are flags only — new tasks land in Pipeline,
+        # unless Activate was requested (e.g. add from a project group).
+        placed = 1 if request.form.get("activate") else 0
 
     category_id = _resolve_category_id(conn)
 

@@ -106,6 +106,7 @@
 .focus-v2 .v2-quick-subcategory,
 .focus-v2 .v2-quick-due,
 .focus-v2 .v2-quick-effort,
+.focus-v2 .v2-quick-project,
 .focus-v2 .v2-quick-check { grid-row: 1; }
 .focus-v2 .v2-checkbox {
   min-height: 29px;
@@ -448,7 +449,31 @@
 }
 .focus-v2 .proj-group > summary .proj-pct { margin-left: auto; }
 .focus-v2 .proj-group > summary .atile-more { margin-left: 2px; }
+.focus-v2 .proj-add-task {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--ea-radius);
+  background: transparent;
+  color: var(--ea-text-secondary);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.focus-v2 .proj-add-task:hover {
+  color: var(--ea-blue, #1a99d6);
+  border-color: var(--ea-border);
+  background: var(--ea-surface);
+}
 .focus-v2 .project-management-row .proj-pct { margin-left: 6px; }
+.focus-v2 .project-management-row .proj-add-task { margin-left: 4px; }
 .focus-v2 .proj-group .active-list { padding: 0 8px 8px; }
 .focus-v2 .group-drag-handle {
   cursor: grab;

@@ -123,19 +123,21 @@
     </label>
     <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Important</span><span class="v2-checkbox"><input type="checkbox" name="important"> ★</span></label>
     <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Urgent</span><span class="v2-checkbox"><input type="checkbox" name="urgent"> 🔥</span></label>
-    <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Project</span><span class="v2-checkbox"><input type="checkbox" id="qa-project-toggle"> Yes</span></label>
+    <label class="v2-quick-field v2-quick-project">
+      <span class="quick-field-label">Project</span>
+      <select name="project_id" id="qa-project-id" class="quick-select">
+        <option value="">None</option>
+        {% for proj in projects %}<option value="{{ proj['id'] }}">{{ proj['name'] }}</option>{% endfor %}
+      </select>
+    </label>
     <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Subtask</span><span class="v2-checkbox"><input type="checkbox" id="qa-subtask-toggle"> Yes</span></label>
     <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Recurring</span><span class="v2-checkbox"><input type="checkbox" name="is_recurring" id="qa-recurring-toggle"> Yes</span></label>
     <button type="submit" class="btn-primary v2-quick-submit">+ Add</button>
   </div>
+  <input type="hidden" name="activate" id="qa-activate" value="">
   <p class="form-hint qa-recurring-hint" id="qa-recurring-hint" style="display:none">
     Recurring items are templates in the <strong>Recurring templates</strong> section below. Choose a recurring template as parent — not an active task.
   </p>
-  <div class="quick-add-row qa-conditional" id="qa-project-row" style="display:none">
-    <select name="project_id" class="quick-select"><option value="">Select project…</option>
-      {% for proj in projects %}<option value="{{ proj['id'] }}">{{ proj['name'] }}</option>{% endfor %}
-    </select>
-  </div>
   <div class="quick-add-row qa-conditional" id="qa-subtask-row" style="display:none">
     <select name="parent_id" id="qa-parent-active" class="quick-select"><option value="">Select parent task…</option>
       {% for t in top_level_tasks %}<option value="{{ t['id'] }}">{{ t['title'] }}</option>{% endfor %}
@@ -263,6 +265,7 @@
               <span class="drag-handle group-drag-handle" title="Drag to reorder">&#8286;</span>
               <span class="proj-group-name">{{ grp['name'] }}</span>
               <span class="proj-pct" title="Project completion">{{ grp.get('completion_pct', 0) }}%</span>
+              <button type="button" class="proj-add-task" title="Add task to this project" aria-label="Add task to this project" data-project-id="{{ grp['project_id'] }}" data-project-name="{{ grp['name']|e }}" onclick="event.stopPropagation(); openAddForProject(this)">+</button>
               <a href="{{ url_for('focus.edit_project', project_id=grp['project_id']) }}" class="atile-more" title="Edit project" aria-label="Edit project" onclick="event.stopPropagation()">⋮</a>
             </summary>
             <ul class="active-list active-list-proj" data-type="project" data-project-id="{{ grp['project_id'] }}">
@@ -358,6 +361,7 @@
         {% if item['project'].get('description') %}<span class="project-management-desc">{{ item['project']['description'] }}</span>{% endif %}
         <span class="recurring-quadrant">{{ item['done'] }}/{{ item['total'] }} done</span>
         <span class="proj-pct" title="Project completion">{{ item['project'].get('completion_pct', 0) }}%</span>
+        <button type="button" class="proj-add-task" title="Add task to this project" aria-label="Add task to this project" data-project-id="{{ item['project']['id'] }}" data-project-name="{{ item['project']['name']|e }}" onclick="openAddForProject(this)">+</button>
         <a href="{{ url_for('focus.edit_project', project_id=item['project']['id']) }}" class="atile-more" title="Edit project" aria-label="Edit project">⋮</a>
       </div>
     </div>
@@ -469,20 +473,38 @@ function setAddMode(mode) {
   if (title) title.textContent = mode === 'project' ? 'Add project' : (mode === 'recurring' ? 'Add recurring task' : 'Add task');
   if (submit) submit.textContent = mode === 'recurring' ? '+ Add recurring task' : '+ Add task';
 }
-function openAddModal(mode) {
+function openAddModal(mode, opts) {
   const modal = document.getElementById('add-task-modal');
   if (!modal) return;
+  opts = opts || {};
   setAddMode(mode || 'task');
+  const projectSel = document.getElementById('qa-project-id');
+  const activate = document.getElementById('qa-activate');
+  if (projectSel) projectSel.value = opts.projectId ? String(opts.projectId) : '';
+  if (activate) activate.value = opts.activate ? '1' : '';
+  const title = document.getElementById('v2-add-title');
+  if (title && opts.projectName && (mode || 'task') === 'task') {
+    title.textContent = 'Add task · ' + opts.projectName;
+  }
   modal.style.display = 'flex';
   setTimeout(function() {
     const form = mode === 'project' ? document.getElementById('v2-add-project-form') : document.getElementById('quick-add-form');
     form?.querySelector('input[type="text"]')?.focus();
   }, 0);
 }
+function openAddForProject(btn) {
+  openAddModal('task', {
+    projectId: btn.dataset.projectId,
+    projectName: btn.dataset.projectName,
+    activate: true
+  });
+}
 function closeAddModal(evt) {
   const modal = document.getElementById('add-task-modal');
   if (!modal || (evt && evt.target !== modal)) return;
   modal.style.display = 'none';
+  const activate = document.getElementById('qa-activate');
+  if (activate) activate.value = '';
 }
 document.querySelectorAll('.v2-add-tab').forEach(function(tab) {
   tab.addEventListener('click', function() { setAddMode(this.dataset.addMode); });
@@ -509,12 +531,6 @@ function syncQuickAddCategories() {
 }
 if (qaParentCat) qaParentCat.addEventListener('change', syncQuickAddCategories);
 if (qaSubCat) qaSubCat.addEventListener('change', function() { if (qaNewSub) qaNewSub.style.display = this.value === '__new__' ? '' : 'none'; });
-document.getElementById('qa-project-toggle')?.addEventListener('change', function() {
-  const row = document.getElementById('qa-project-row');
-  const sel = row.querySelector('select');
-  row.style.display = this.checked ? '' : 'none';
-  if (sel) sel.disabled = !this.checked;
-});
 document.getElementById('qa-subtask-toggle')?.addEventListener('change', syncQuickAddParentPickers);
 document.getElementById('qa-recurring-toggle')?.addEventListener('change', syncQuickAddParentPickers);
 function syncQuickAddParentPickers() {
@@ -562,11 +578,44 @@ document.querySelectorAll('.active-col > .active-list').forEach(function(list) {
   list.after(btn); apply();
 });
 
-// ── Start with Active groups collapsed (ignore browser restore) ───────────
-document.querySelectorAll('.active-columns details').forEach(function(group) {
-  group.open = false;
-  delete group.dataset.searchOpened;
-});
+// ── Active collapse: default closed on first visit; remember for this session ─
+const ACTIVE_COLLAPSE_KEY = 'focus.activeCollapse';
+function activeCollapseKey(el) {
+  if (el.classList.contains('side-col-collapse')) {
+    return el.querySelector('.head-project') ? 'col-project' : 'col-recurring';
+  }
+  if (el.dataset.projectId) return 'project-' + el.dataset.projectId;
+  if (el.dataset.taskId) return 'recurring-' + el.dataset.taskId;
+  for (let i = 0; i < el.classList.length; i++) {
+    const cls = el.classList[i];
+    if (cls.indexOf('todo-') === 0 && cls !== 'todo-section') return cls;
+  }
+  return null;
+}
+function saveActiveCollapse() {
+  const state = {};
+  document.querySelectorAll('.active-columns details').forEach(function(el) {
+    const key = activeCollapseKey(el);
+    if (key) state[key] = !!el.open;
+  });
+  try { sessionStorage.setItem(ACTIVE_COLLAPSE_KEY, JSON.stringify(state)); } catch (e) {}
+}
+(function restoreActiveCollapse() {
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(ACTIVE_COLLAPSE_KEY) || 'null'); } catch (e) { saved = null; }
+  document.querySelectorAll('.active-columns details').forEach(function(el) {
+    delete el.dataset.searchOpened;
+    const key = activeCollapseKey(el);
+    if (saved && key && Object.prototype.hasOwnProperty.call(saved, key)) {
+      el.open = !!saved[key];
+    } else {
+      el.open = false;
+    }
+  });
+  document.querySelectorAll('.active-columns details').forEach(function(el) {
+    el.addEventListener('toggle', saveActiveCollapse);
+  });
+})();
 
 // ── Search filter ──────────────────────────────────────────────────────────
 const searchInput = document.getElementById('task-search');
