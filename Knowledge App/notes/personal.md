@@ -44,6 +44,20 @@ _(to be updated as tests are completed)_
 
 - **Taking on issues not created by me or outside my control.** Christian notices tension around owning problems he didn't cause and can't fully control the outcome of — and works on not getting defensive when these surface. Worth naming gently when it comes up, rather than reassuring it away.
 
+## Operating Principle — Build vs React Mantra (added 2026-08-01)
+
+**Mantra: Improve the quality, robustness, and analysis coming out of the accounting department, while staying on top of ad hoc tasks.**
+
+Resolved via grill-me session on 2026-08-01, prompted by the v2 focus board going live:
+
+- **Build** = time logged against a project. **React** = everything else, including all procrastination-flagged Q1 items — those stay correctly placed, this doesn't change.
+- Project (Build) time is inherently Q2 (important, rarely urgent) and never forces itself onto the board the way React items do — it only happens if claimed deliberately.
+- **At session open**, alongside the existing board/timer check, negotiate the day's rough split between Build and React. No fixed formula or ratio target — this is a daily conversation, not a rule.
+- Hold this lightly during the session: stay cognizant of the Build/React tension and name it when relevant, but don't run mechanical check-ins or hard time-boxes against it. ("Just stay cognizant of the dilemma.")
+- **Recurrence bridge:** when an ad hoc (React) item shows a *repeating failure pattern* — the same root cause resurfacing across a session or two, not just a new instance of a known category — flag it as an issue first. Default assumption is it becomes a **recurring template** (monthly catch) rather than a full project, unless the pattern clearly warrants structural project work.
+- **Threshold matters:** a single occurrence, however messy, is not yet a pattern — don't over-trigger this. (E.g. Empire Life's 4-group missing-payment situation on 2026-08-01 was explicitly treated as a normal Q1 item, not a recurrence flag, since it's a first instance.)
+- Explicitly not about visibility/being seen — the mantra is about the work being good on its own terms, not about signaling toward the Controller/CFO track.
+
 ## Parked Ideas — 2026-07-29
 
 Parked for later, not for today:
