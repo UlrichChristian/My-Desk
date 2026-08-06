@@ -225,6 +225,10 @@
     {{ effort_chip(task) }}
     {% if task.get('important') %}<span class="mk mk-important" title="Important">★</span>{% endif %}
     {% if task.get('urgent') %}<span class="mk mk-urgent" title="Urgent">🔥</span>{% endif %}
+    {% if todo and task.get('due_reached') and not (task.get('important') and task.get('urgent')) %}
+    <span class="mk mk-due-override"
+          title="Its due date has arrived, so this sits in Do Now regardless of Important/Urgent. Clear or push out the due date to move it.">⏰ due</span>
+    {% endif %}
     {% if task.get('subtask_total', 0) > 0 %}<span class="atile-steps" title="Subtasks">{{ task['subtask_total'] }} steps</span>{% endif %}
     {% if task.get('due_date') %}<span class="atile-due">{{ task['due_date'] }}</span>{% endif %}
     {% if show_edit %}

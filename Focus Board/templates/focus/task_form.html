@@ -181,6 +181,14 @@
         </div>
       </div>
 
+      {% if due_reached %}
+      {# Flags stay editable — a disabled checkbox submits nothing and would wipe them. #}
+      <p class="form-hint form-hint-warn">
+        ⏰ This task's due date has arrived, so it sits in <strong>Do Now</strong> whatever
+        these flags say. Clear or push out the due date to let Important/Urgent place it.
+      </p>
+      {% endif %}
+
       <div class="form-row">
         <div class="form-group">
           <label for="type_override">Type override</label>
