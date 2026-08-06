@@ -129,6 +129,14 @@
   color: var(--ea-text-secondary);
   margin: 6px 0 0;
 }
+/* Due date is overriding the important/urgent placement — explain, don't block. */
+.form-hint-warn {
+  color: #1565c0;
+  background: #e3f0fc;
+  border-radius: 6px;
+  padding: 7px 10px;
+  line-height: 1.45;
+}
 .form-static {
   font-size: 13px;
   color: var(--ea-text-secondary);

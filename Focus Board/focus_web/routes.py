@@ -125,6 +125,20 @@ def _pending_badge(pending_since: str | None, created_on: str | None) -> dict | 
     return {"type": "pending", "days": days, "text": f"⏳ {days}d pending"}
 
 
+def _due_reached(due_date: str | None) -> bool:
+    """True once a due date has arrived or passed.
+
+    A reached due date promotes a To-do into Do Now regardless of its
+    important/urgent flags, so the board and the edit form both surface it.
+    """
+    if not due_date:
+        return False
+    try:
+        return date.fromisoformat(due_date[:10]) <= date.today()
+    except ValueError:
+        return False
+
+
 def _due_badge(due_date: str | None) -> dict | None:
     if not due_date:
         return None
@@ -168,14 +182,8 @@ def board():
         "delegate": [],
         "later": [],
     }
-    today_date = date.today()
     for row in active.get("adhoc", []):
-        due_reached = False
-        if row.get("due_date"):
-            try:
-                due_reached = date.fromisoformat(row["due_date"][:10]) <= today_date
-            except ValueError:
-                pass
+        due_reached = _due_reached(row.get("due_date"))
         row["due_reached"] = due_reached
         if due_reached or (row.get("urgent") and row.get("important")):
             quadrant = "do"
@@ -677,6 +685,7 @@ def edit_task(task_id):
         effort_labels=_EFFORT_LABELS,
         palette=color_svc.PALETTE,
         frame_styles=color_svc.FRAME_STYLES,
+        due_reached=_due_reached(task["due_date"]),
     )
 
 

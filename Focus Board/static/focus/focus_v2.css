@@ -590,6 +590,8 @@
 .focus-v2 .mk { font-size: 11px; line-height: 1; padding: 2px 5px; border-radius: 8px; font-weight: 700; white-space: nowrap; }
 .focus-v2 .mk-urgent { color: #c62828; background: #fce4ec; }
 .focus-v2 .mk-important { color: #b26a00; background: #fff3d6; }
+/* Due date has forced this tile into Do Now, overriding its flags. */
+.focus-v2 .mk-due-override { color: #1565c0; background: #e3f0fc; cursor: help; }
 
 /* ── Waiting-on chip ─────────────────────────────────────────────────────── */
 .focus-v2 .chip-wait { background: #fdecea; color: #c0392b; }
