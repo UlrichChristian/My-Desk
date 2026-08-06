@@ -36,6 +36,9 @@ def create_app() -> Flask:
         static_folder=os.path.join(_APP_DIR, "static"),
     )
     app.secret_key = os.environ.get("C_APP_SECRET_KEY") or os.urandom(32)
+    # Cookies are scoped by host, not port — 127.0.0.1:5002 shares a jar with the
+    # ASO app on :5000. A distinct name stops them clobbering each other's session.
+    app.config["SESSION_COOKIE_NAME"] = "cdesk_session"
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     app.jinja_env.auto_reload = True
     app.jinja_env.cache_size = 0
