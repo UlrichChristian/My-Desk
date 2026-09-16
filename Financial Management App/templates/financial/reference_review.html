@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Reference Review — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('financial.static', filename='financial/financial.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="fin-header">
+  <a class="fin-back" href="{{ url_for('financial.home') }}">
+    <i class="fa-solid fa-arrow-left"></i> Financial Management
+  </a>
+  <h1>Reference Review</h1>
+  <p class="lead">
+    Unknown product codes and income accounts are auto-inserted on import with
+    <code>status=review</code> instead of failing the load. Confirm the parse
+    (or correct it), then accept. Retire only if the code should not exist.
+  </p>
+</div>
+
+<section class="fin-panel">
+  <div class="fin-summary-strip">
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Products waiting</span>
+      <span class="fin-summary-value {% if counts.products %}num-neg{% endif %}">
+        {{ '{:,}'.format(counts.products) }}
+      </span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Income accounts waiting</span>
+      <span class="fin-summary-value {% if counts.income_accounts %}num-neg{% endif %}">
+        {{ '{:,}'.format(counts.income_accounts) }}
+      </span>
+    </div>
+  </div>
+  <p class="fin-audit">
+    <i class="fa-solid fa-clipboard-check"></i>
+    Process Street: mirror each review pass with a to-do step and an audit step.
+  </p>
+  <div class="fin-report-bar">
+    <form method="get" class="fin-field" style="flex-direction:row; align-items:center; gap:8px;">
+      <span class="fin-label">Show</span>
+      <select name="show" class="fin-select" onchange="this.form.submit()">
+        <option value="review" {% if show == 'review' %}selected{% endif %}>Waiting (review)</option>
+        <option value="active" {% if show == 'active' %}selected{% endif %}>Active</option>
+        <option value="retired" {% if show == 'retired' %}selected{% endif %}>Retired</option>
+        <option value="all" {% if show == 'all' %}selected{% endif %}>All</option>
+      </select>
+      <noscript><button type="submit" class="btn-secondary">Show</button></noscript>
+    </form>
+  </div>
+</section>
+
+<section class="fin-panel">
+  <div class="fin-report-bar">
+    <h2 style="margin:0;"><i class="fa-solid fa-receipt"></i> Income accounts</h2>
+    <span class="fin-note" style="margin:0;">{{ '{:,}'.format(income_accounts | length) }} shown</span>
+  </div>
+  <p class="fin-note">
+    Seeded accounts are already active. A brand-new QBO income line (the SHSP
+    case) lands here unclassified so it can be categorised before the next report.
+  </p>
+  {% if income_accounts %}
+  <div class="fin-table-wrap">
+    <table class="fin-table fin-review-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Category</th>
+          <th>Basis</th>
+          <th>Exclude</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in income_accounts %}
+        <tr>
+          <td>
+            <form method="post" action="{{ url_for('financial.reference_review_income', income_id=r.id) }}"
+                  class="fin-inline-form" id="income-{{ r.id }}">
+              <input type="hidden" name="show" value="{{ show }}">
+              <strong>{{ r.name }}</strong>
+            </form>
+          </td>
+          <td>
+            <select name="category" class="fin-select" form="income-{{ r.id }}">
+              {% for c in income_categories %}
+              <option value="{{ c }}" {% if r.category == c %}selected{% endif %}>{{ c | replace('_', ' ') }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <select name="basis" class="fin-select" form="income-{{ r.id }}">
+              <option value="">—</option>
+              {% for b in income_bases %}
+              <option value="{{ b }}" {% if r.basis == b %}selected{% endif %}>{{ b | replace('_', ' ') }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <input type="checkbox" name="exclude_from_reports" form="income-{{ r.id }}"
+                   {% if r.exclude_from_reports %}checked{% endif %}>
+          </td>
+          <td>
+            <select name="status" class="fin-select" form="income-{{ r.id }}">
+              {% for s in statuses %}
+              <option value="{{ s }}" {% if r.status == s %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <button type="submit" class="btn-primary" form="income-{{ r.id }}">Save</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="fin-note">Nothing in this filter.</p>
+  {% endif %}
+</section>
+
+<section class="fin-panel">
+  <div class="fin-report-bar">
+    <h2 style="margin:0;"><i class="fa-solid fa-box"></i> Products</h2>
+    {% if counts.products and show == 'review' %}
+    <form method="post" action="{{ url_for('financial.reference_review_accept_parsed') }}"
+          onsubmit="return confirm('Accept all {{ counts.products }} review product(s) as parsed? Channel, benefit and HST rate stay as ingest classified them.');">
+      <button type="submit" class="btn-primary">
+        Accept all {{ counts.products }} as parsed
+      </button>
+    </form>
+    {% else %}
+    <span class="fin-note" style="margin:0;">{{ '{:,}'.format(products | length) }} shown</span>
+    {% endif %}
+  </div>
+  <p class="fin-note">
+    The trailing <code>(13)</code>/<code>(14)</code>/<code>(15)</code> is the
+    <strong>HST rate</strong> (Ontario / Nova Scotia / NB-NL-PEI), not a pay
+    frequency. Blank rate is GST-only. Benefit is conservative — “Sub Fee” and
+    “Subscription Fee” stay distinct until you merge them here.
+  </p>
+  {% if products %}
+  <div class="fin-table-wrap">
+    <table class="fin-table fin-review-table">
+      <thead>
+        <tr>
+          <th>Code</th>
+          <th>Channel</th>
+          <th>Fee kind</th>
+          <th>Benefit</th>
+          <th>HST</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in products %}
+        <tr>
+          <td>
+            <form method="post" action="{{ url_for('financial.reference_review_product', product_id=r.id) }}"
+                  class="fin-inline-form" id="product-{{ r.id }}">
+              <input type="hidden" name="show" value="{{ show }}">
+              <strong>{{ r.code }}</strong>
+              {% if r.code_normalized and r.code_normalized != r.code %}
+              <div class="fin-muted">{{ r.code_normalized }}</div>
+              {% endif %}
+            </form>
+          </td>
+          <td>
+            <select name="channel" class="fin-select" form="product-{{ r.id }}">
+              <option value="">—</option>
+              {% for c in product_channels %}
+              <option value="{{ c }}" {% if r.channel == c %}selected{% endif %}>{{ c }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <select name="fee_kind" class="fin-select" form="product-{{ r.id }}">
+              <option value="">—</option>
+              {% for k in product_fee_kinds %}
+              <option value="{{ k }}" {% if r.fee_kind == k %}selected{% endif %}>{{ k }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <input type="text" name="benefit_code" form="product-{{ r.id }}"
+                   value="{{ r.benefit_code or '' }}" class="fin-input-compact">
+          </td>
+          <td>
+            <select name="hst_rate" class="fin-select" form="product-{{ r.id }}">
+              <option value="">—</option>
+              {% for rate in [13, 14, 15] %}
+              <option value="{{ rate }}" {% if r.hst_rate == rate %}selected{% endif %}>{{ rate }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <select name="status" class="fin-select" form="product-{{ r.id }}">
+              {% for s in statuses %}
+              <option value="{{ s }}" {% if r.status == s %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <button type="submit" class="btn-primary" form="product-{{ r.id }}">Save</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="fin-note">Nothing in this filter.</p>
+  {% endif %}
+</section>
+
+{% endblock %}

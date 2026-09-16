@@ -1,0 +1,727 @@
+// =============================================================================
+// Financial Management App - proposed schema
+// SQLite (financial.db) - My Desk workspace
+// Paste into https://dbdiagram.io to view the ERD
+// =============================================================================
+
+Project financial_management {
+  database_type: 'SQLite'
+  Note: '''
+    Refactor of fin_db. Replaces the dim_/fact_ tables (all four dim_ tables
+    hold 0 rows and are never read) with a reference spine anchored on the EA
+    account oid - the one identifier that does not drift.
+
+    Scope: accounts, clients, revenue, HRIS/payroll integrations.
+    A/R and P&L are out of scope but deliberately not blocked.
+
+    House conventions: plural nouns, id INTEGER PRIMARY KEY AUTOINCREMENT,
+    TEXT ISO-8601 UTC timestamps ending Z, INTEGER 0/1 booleans, REAL money,
+    status values instead of soft-delete columns, created_by as a username
+    snapshot (never an FK - each app has its own .db file).
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+Enum account_status {
+  active
+  updating
+  terminated
+  unknown
+}
+
+Enum client_status {
+  active
+  terminated
+  merged
+}
+
+Enum client_key_kind {
+  group_id
+  system_id
+  qbo_name
+  manual
+}
+
+Enum income_category {
+  admin_fee
+  commission
+  referral_fee
+  processing_fee
+  project
+  adjustment
+  tax
+  unclassified
+}
+
+Enum income_basis {
+  premium
+  claims
+  sub_fees
+  rrsp
+  bonus
+  vendor
+  none
+}
+
+Enum product_channel {
+  direct
+  vendor
+  aso
+}
+
+Enum product_fee_kind {
+  admin
+  commission
+  tax
+  fee
+  adjustment
+  other
+}
+
+Enum reference_status {
+  active
+  review
+  retired
+}
+
+Enum metric_source {
+  accounts_csv
+  manual
+  estimated
+}
+
+Enum correction_field {
+  client_key
+  quantity
+  rate
+  product_code
+  income_account
+  exclude
+}
+
+Enum correction_strategy {
+  set_value
+  derive_quantity_from_rate
+  derive_rate_from_quantity
+  scale
+}
+
+Enum integration_role {
+  payroll
+  hris
+  benefits
+}
+
+Enum integration_status {
+  in_discussion
+  preparation
+  on_trial
+  stable
+  maintenance
+  retired
+}
+
+Enum connection_kind {
+  api
+  sftp_feed
+  file_upload
+  manual
+  none
+}
+
+Enum sync_direction {
+  inbound
+  outbound
+  bidirectional
+}
+
+Enum import_source {
+  drilldown
+  ar_aging
+  gl_export
+}
+
+Enum import_status {
+  loading
+  loaded
+  failed
+  superseded
+}
+
+// ---------------------------------------------------------------------------
+// Provenance
+// ---------------------------------------------------------------------------
+
+Table revenue_imports {
+  id              integer       [pk, increment]
+  source          import_source [not null, default: 'drilldown']
+  period_from     text
+  period_to       text
+  files_json      text
+  row_counts_json text
+  parity_json     text
+  status          import_status [not null, default: 'loaded']
+  note            text
+  created_on      text          [not null]
+  created_by      text
+
+  Note: '''
+    One row per upload.
+
+    source is the A/R and P&L hook - an aging or GL export reuses this same
+    audit spine rather than needing its own.
+
+    parity_json holds per-period row counts and SUM(amount), so a re-import
+    that silently loses a month is detectable after the fact.
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// Client identity
+// ---------------------------------------------------------------------------
+
+Table clients {
+  id             integer       [pk, increment]
+  display_name   text          [not null]
+  legal_name     text
+  group_id       text
+  system_id      text
+  status         client_status [not null, default: 'active']
+  merged_into_id integer
+  created_on     text          [not null]
+  updated_on     text
+
+  indexes {
+    group_id
+  }
+
+  Note: '''
+    A durable client record with a surrogate id. 492 distinct clients today.
+
+    revenue_change.py attributes on clients.id instead of the derived string,
+    which is what currently makes a GROUP ID rename look like a client
+    simultaneously lost and won.
+
+    merged_into_id handles a genuine client consolidation without deleting
+    history.
+  '''
+}
+
+Table client_keys {
+  id                integer         [pk, increment]
+  client_id         integer         [not null]
+  key_value         text            [not null]
+  key_kind          client_key_kind [not null]
+  is_current        integer         [not null, default: 1]
+  first_seen_period text
+  last_seen_period  text
+  created_on        text            [not null]
+  created_by        text
+
+  indexes {
+    (key_value, key_kind) [unique]
+    client_id
+  }
+
+  Note: '''
+    THE GROUP ID RENAME FIX. Every derived key string ever observed maps to a
+    stable client_id. A rename inserts a new alias against the same client and
+    retires the old one (is_current = 0), so the client stays continuous.
+
+    Replaces the role client_mapping_override plays for manual client fixes;
+    match-rule corrections move to ingest_corrections.
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// Account spine - anchored on oid
+// ---------------------------------------------------------------------------
+
+Table consulting_houses {
+  id         integer          [pk, increment]
+  name       text             [not null, unique]
+  status     reference_status [not null, default: 'active']
+  created_on text             [not null]
+
+  Note: '''
+    46 distinct. Computed in enrich() today and then discarded - there is no
+    column for it on fact_revenue, so consulting house is currently
+    unreportable.
+  '''
+}
+
+Table advisors {
+  id                  integer          [pk, increment]
+  name                text             [not null, unique]
+  consulting_house_id integer
+  status              reference_status [not null, default: 'active']
+  created_on          text             [not null]
+  updated_on          text
+
+  Note: '''
+    100 distinct. No junction table: brokerList holds exactly one element in
+    1,490 of 1,492 rows, so a junction would add a join to every advisor query
+    and buy nothing.
+  '''
+}
+
+Table accounts {
+  id                     integer        [pk, increment]
+  oid                    text           [not null, unique]
+  name                   text
+  legal_name             text
+  client_id              integer
+  advisor_id             integer
+  consulting_house_id    integer
+  status                 account_status [not null, default: 'active']
+  benefit_type           text
+  benefit_package_type   text
+  member_updates_type    text
+  sso_enabled            integer        [not null, default: 0]
+  gl_reference_code      text
+  gl_reference_codes_raw text
+  plan_design_names_raw  text
+  effective_on           text
+  first_billed_on        text
+  last_pa_access_on      text
+  source_modified_on     text
+  source_error_count     integer        [not null, default: 0]
+  source_warning_count   integer        [not null, default: 0]
+  first_seen_import_id   integer
+  last_seen_import_id    integer
+  created_on             text           [not null]
+  updated_on             text
+
+  indexes {
+    client_id
+    advisor_id
+    status
+  }
+
+  Note: '''
+    The stable spine. Imports UPSERT here and never delete.
+
+    oid is unique across all 1,492 rows. name is NOT unique - 2 duplicates
+    exist, which is why the name-fallback join in enrich() must be deleted.
+
+    status collapses isActive and isUpdating into one honest enum. 485 of
+    1,492 accounts (33%) are terminated, so a boolean was never adequate for a
+    drilldown spanning 13 months.
+
+    effective_on and first_billed_on are what distinguish a genuinely new
+    client from a GROUP ID rename.
+
+    gl_reference_code is the 4-digit GL code, present on 1,490 of 1,492
+    accounts - the bridge to later P&L work.
+
+    Dates are ISO-normalised at ingest from source strings like "May 1, 2021".
+    benefit_type and benefit_package_type stay bare TEXT (not CHECK enums)
+    because they are vendor-controlled: a new value should surface for review,
+    not fail the import.
+
+    plan_design_names_raw is stored unnormalised on purpose - no consumer in
+    scope, and normalising means building a reconciler for a field nobody
+    queries yet.
+  '''
+}
+
+Table carriers {
+  id         integer [pk, increment]
+  name       text    [not null, unique]
+  created_on text    [not null]
+
+  Note: '''
+    47 distinct, parsed out of the accounts CSV policies field. Also the join
+    key to the Reconciliation App, which models the same carriers against the
+    same oid.
+  '''
+}
+
+Table account_policies {
+  id             integer [pk, increment]
+  account_id     integer [not null]
+  carrier_id     integer
+  policy_no      text    [not null]
+  benefit_line   text
+  is_placeholder integer [not null, default: 0]
+  raw_value      text    [not null]
+  created_on     text    [not null]
+
+  indexes {
+    (account_id, raw_value) [unique]
+    carrier_id
+  }
+
+  Note: '''
+    About 5,170 rows, 1 to 12 per account. 100% of the policies elements match
+    the "Carrier - PolicyNo" shape, so carrier is fully recoverable from data
+    already downloaded every month.
+
+    benefit_line is parsed from an ALLOWLIST only (Life, LTD, STD, DepLife,
+    Health, Dental, Optional, EAP, ASO) and is NULL otherwise. Only about 530
+    of the 5,170 suffixes are real benefit tokens; the rest are numeric
+    (0008, 0053, 007) and must never be read as a benefit.
+
+    is_placeholder flags the 10 rows whose policy number is literally TBD.
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// The vintaging fix
+// ---------------------------------------------------------------------------
+
+Table account_period_metrics {
+  id                  integer       [pk, increment]
+  account_id          integer       [not null]
+  period              text          [not null]
+  lives               integer
+  premium             real
+  status              text
+  advisor_id          integer
+  consulting_house_id integer
+  source              metric_source [not null, default: 'accounts_csv']
+  captured_on         text          [not null]
+  import_id           integer
+  created_on          text          [not null]
+  updated_on          text
+
+  indexes {
+    (account_id, period) [unique]
+    period
+  }
+
+  Note: '''
+    THE VINTAGING FIX - one row per account per month (period is YYYY-MM).
+
+    Today enrich() joins every revenue row, whatever its period, to TODAY
+    accounts CSV. Verified: 1,073 of 1,073 oids carry identical premium and
+    lives across all 13 periods - zero variance. Revenue/Premium for 2025-08
+    is computed against September 2026 premium.
+
+    Populated only for the period the CSV honestly describes (the latest).
+    Earlier periods get no row, so the ratio renders blank rather than lying.
+    Per the no-backfill decision, nothing before 2026-07 is reconstructed.
+
+    This table also absorbs account_snapshot, whose only unique capability was
+    multiple pulls within one month - a capability the live data shows being
+    used to store five identical pulls 23 minutes apart.
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// Reference taxonomies
+// ---------------------------------------------------------------------------
+
+Table income_accounts {
+  id                   integer          [pk, increment]
+  name                 text             [not null, unique]
+  category             income_category  [not null, default: 'unclassified']
+  basis                income_basis
+  is_client_revenue    integer          [not null, default: 1]
+  exclude_from_reports integer          [not null, default: 0]
+  sort_order           integer          [not null, default: 0]
+  status               reference_status [not null, default: 'active']
+  note                 text
+  created_on           text             [not null]
+  updated_on           text
+
+  Note: '''
+    Replaces the hardcoded EXCLUDED_INCOME_ACCOUNTS frozenset in
+    revenue_reports.py. 15 distinct accounts observed; seeds as 4 categories.
+
+    An income account seen at import that is not in this table is
+    auto-inserted as category unclassified, status review, and surfaces on a
+    review page - the mechanism that would have caught SHSP the first time it
+    appeared rather than leaving it an open question.
+  '''
+}
+
+Table products {
+  id              integer          [pk, increment]
+  code            text             [not null, unique]
+  code_normalized text             [not null]
+  channel         product_channel
+  fee_kind        product_fee_kind
+  benefit_code    text
+  hst_rate        integer
+  description     text
+  status          reference_status [not null, default: 'active']
+  created_on      text             [not null]
+  updated_on      text
+
+  indexes {
+    (benefit_code, channel)
+    hst_rate
+  }
+
+  Note: '''
+    148 distinct codes with a clean grammar:
+      [VEN- | ASO ] {Admin | Comm} - {BENEFIT} [(13|14|15)]
+
+    The trailing (13)/(14)/(15) is the HST RATE, i.e. the tax jurisdiction -
+    NOT a pay frequency. 13 Ontario, 14 Nova Scotia, 15 NB/NL/PEI, and no
+    suffix for GST-only provinces. Observed split:
+      none   80 codes   62,557 rows   $3,460,966
+      (13)   42 codes   21,319 rows   $1,898,728
+      (15)   17 codes      992 rows     $137,317
+      (14)    9 codes      979 rows      $39,407
+    Admin-EH exists in all four variants (4,627 / 2,844 / 126 / 291 rows).
+
+    15 does NOT identify a single province (NB, NL and PEI all charge 15%), so
+    the rate is stored and province is deliberately NOT inferred.
+
+    Why benefit_code matters: today the same benefit is four different strings,
+    so revenue by benefit across the country is not answerable. It also
+    protects revenue_change._bridge_existing(), which matches on raw
+    product_code and would book a dropped line plus a new line if an account
+    HST treatment ever changed - a move between provinces, or a rate change
+    such as Nova Scotia going 15% to 14% on 2025-04-01.
+
+    code_normalized reconciles casing drift: COMM-EV vs Comm-EV,
+    VEN-admin-SA vs VEN-Admin-SA, Ven-Admin-HS.
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// Fact
+// ---------------------------------------------------------------------------
+
+Table revenue_lines {
+  id                  integer [pk, increment]
+  import_id           integer [not null]
+  source_row_no       integer
+  period              text    [not null]
+  txn_date            text
+  txn_type            text
+  invoice_no          text
+  name_raw            text
+  customer_raw        text
+  memo                text
+  account_id          integer
+  client_id           integer
+  advisor_id          integer
+  consulting_house_id integer
+  product_id          integer
+  income_account_id   integer
+  oid                 text
+  client_key_raw      text
+  advisor_label       text
+  consulting_house    text
+  product_code_raw    text
+  income_account_raw  text
+  amount              real
+  quantity            real
+  rate                real
+  correction_id       integer
+  is_resolved         integer [not null, default: 0]
+  created_on          text    [not null]
+
+  indexes {
+    period
+    (client_id, period)
+    (account_id, period)
+    income_account_id
+    import_id
+  }
+
+  Note: '''
+    One row per drilldown line - 85,847 today across 13 periods. Only 38 rows
+    fail to resolve to an oid, so the mapping is in good shape and this
+    refactor must not regress it.
+
+    The _raw and _label columns are deliberate denormalised snapshots of what
+    the source said at import. They cost one TEXT column each and give
+    permanent forensics plus exact reproducibility of the old report.
+    client_key_raw in particular answers "which rows changed client, and from
+    what". consulting_house closes the gap where enrich() computes the value
+    and currently has nowhere to put it.
+
+    premium_split and lives_split are GONE. They are a PivotTable artifact
+    (premium divided by row count so a pivot does not multiply-count), and
+    storing them is precisely what bakes current premium into 2025-08. The
+    correct figure is computed at query time from account_period_metrics; the
+    Excel export recomputes the split on the way out.
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// Durable ingest-time corrections
+// ---------------------------------------------------------------------------
+
+Table ingest_corrections {
+  id                   integer             [pk, increment]
+  period_from          text
+  period_to            text
+  match_oid            text
+  match_invoice_no     text
+  match_product_code   text
+  match_income_account text
+  match_name           text
+  match_precustomer    text
+  match_memo           text
+  match_memo_contains  text
+  target_field         correction_field    [not null]
+  strategy             correction_strategy [not null, default: 'set_value']
+  target_text          text
+  target_number        real
+  status               reference_status    [not null, default: 'active']
+  applied_count        integer             [not null, default: 0]
+  last_applied_on      text
+  note                 text                [not null]
+  created_on           text                [not null]
+  created_by           text
+  updated_on           text
+  last_modified_by     text
+
+  Note: '''
+    Generalises client_mapping_override from "fix the client" to "fix any
+    field". All match_ columns are ANDed; NULL means no filter on that column.
+    Applied inside enrich() BEFORE the load, so a re-upload re-applies the fix
+    instead of wiping it.
+
+    This closes the known hazard that re-importing Aug 2025 destroys the manual
+    qty/rate repairs.
+
+    Corrections are period-SCOPED and rule-based rather than per-line, because
+    the quantity = -1 / rate = amount pattern turns out to affect 1,221 to
+    1,432 rows in EVERY period - it is only wrong in some of them.
+
+    note is NOT NULL on purpose: an unexplained correction is worse than none.
+    applied_count dropping to 0 on an import is the signal that a rule has gone
+    stale and is silently no longer doing anything.
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// HRIS / payroll integrations
+// ---------------------------------------------------------------------------
+
+Table integration_vendors {
+  id         integer          [pk, increment]
+  name       text             [not null, unique]
+  aliases    text
+  status     reference_status [not null, default: 'active']
+  note       text
+  created_on text             [not null]
+  updated_on text
+
+  Note: '''
+    Seeded: ADP, Ceridian Dayforce, SAP SuccessFactors, Workday, UKG, BambooHR,
+    Humi, Payworks, Nethris, Rise, QuickBooks Payroll, Other.
+
+    A catalogue rather than free text because vendor rollup is the whole point
+    of capturing this - free text guarantees ADP / A.D.P. / ADP Workforce Now
+    fragment the reporting within a year. But a locked catalogue guarantees
+    data entry stops the first time someone hits a vendor nobody anticipated,
+    hence vendor_name_raw on account_integrations as a supervised escape hatch.
+
+    aliases is pipe-joined, matching the CSV convention already in use, and
+    absorbs known spelling variants at match time.
+  '''
+}
+
+Table account_integrations {
+  id               integer            [pk, increment]
+  client_id        integer            [not null]
+  account_id       integer
+  vendor_id        integer
+  vendor_name_raw  text
+  role             integration_role   [not null]
+  connection_type  connection_kind    [not null, default: 'manual']
+  direction        sync_direction     [not null, default: 'inbound']
+  status           integration_status [not null, default: 'stable']
+  status_raw       text
+  effective_from   text               [not null]
+  effective_to     text
+  external_ref     text
+  note             text
+  created_on       text               [not null]
+  created_by       text
+  updated_on       text
+  last_modified_by text
+
+  indexes {
+    client_id
+    vendor_id
+    (client_id, account_id, vendor_id, role, effective_from) [unique]
+  }
+
+  Note: '''
+    Grain is the CLIENT (clients.id), with optional account_id for a feed that
+    covers only one of a client's accounts. NULL account_id means the whole
+    client. Seeded from a sheet, then maintained through an edit screen.
+
+    A feed is contracted and maintained at the client — the integration list
+    is kept that way, and no client on it has accounts on different systems.
+    clients.id is a surrogate that does not drift (client_keys absorbs GROUP
+    ID renames).
+
+    Role is a column, not three boolean flags, because status belongs to the
+    role: Cando, Lloydminster and WF Steel all have an HRIS feed at a
+    different status from their payroll feed. One vendor serving both payroll
+    and HRIS is therefore two rows. Two vendors (ADP payroll, Workday HRIS)
+    is also two rows.
+
+    Statuses use the business vocabulary from the integration list
+    (in_discussion / preparation / on_trial / stable / maintenance / retired)
+    rather than an invented lifecycle. status_raw keeps the source label so
+    nothing the business wrote is lost to the mapping. A feed in preparation,
+    on trial or under maintenance still counts as "clients with a feed".
+
+    effective_to NULL means current. A vendor change closes the old row and
+    opens a new one; nothing is updated in place and nothing is deleted.
+
+    CHECK constraint (not expressible in DBML, enforced in the DDL):
+      CHECK (vendor_id IS NOT NULL OR vendor_name_raw IS NOT NULL)
+
+    Unique index uses COALESCE(account_id, -1) because SQLite treats NULLs as
+    distinct and a bare UNIQUE would let the same client-wide feed be inserted
+    twice.
+
+    SQLite cannot enforce non-overlapping effective ranges; the service layer
+    validates that on write, alongside the enum validation.
+
+    Because only about 150 of roughly 1,000 active accounts have an
+    integration, the overview LEFT JOINs from clients/accounts — absence is
+    the answer to "who still needs one".
+  '''
+}
+
+// ---------------------------------------------------------------------------
+// Relationships
+// ---------------------------------------------------------------------------
+
+Ref: clients.merged_into_id > clients.id
+Ref: client_keys.client_id > clients.id
+
+Ref: advisors.consulting_house_id > consulting_houses.id
+
+Ref: accounts.client_id > clients.id
+Ref: accounts.advisor_id > advisors.id
+Ref: accounts.consulting_house_id > consulting_houses.id
+Ref: accounts.first_seen_import_id > revenue_imports.id
+Ref: accounts.last_seen_import_id > revenue_imports.id
+
+Ref: account_policies.account_id > accounts.id
+Ref: account_policies.carrier_id > carriers.id
+
+Ref: account_period_metrics.account_id > accounts.id
+Ref: account_period_metrics.advisor_id > advisors.id
+Ref: account_period_metrics.consulting_house_id > consulting_houses.id
+Ref: account_period_metrics.import_id > revenue_imports.id
+
+Ref: revenue_lines.import_id > revenue_imports.id
+Ref: revenue_lines.account_id > accounts.id
+Ref: revenue_lines.client_id > clients.id
+Ref: revenue_lines.advisor_id > advisors.id
+Ref: revenue_lines.consulting_house_id > consulting_houses.id
+Ref: revenue_lines.product_id > products.id
+Ref: revenue_lines.income_account_id > income_accounts.id
+Ref: revenue_lines.correction_id > ingest_corrections.id
+
+Ref: account_integrations.client_id > clients.id
+Ref: account_integrations.account_id > accounts.id
+Ref: account_integrations.vendor_id > integration_vendors.id

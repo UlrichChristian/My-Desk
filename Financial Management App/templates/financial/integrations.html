@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% block title %}HRIS &amp; Payroll Integrations — My Desk{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('financial.static', filename='financial/financial.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="fin-header">
+  <a class="fin-back" href="{{ url_for('financial.home') }}">
+    <i class="fa-solid fa-arrow-left"></i> Financial Management
+  </a>
+  <h1>HRIS &amp; Payroll Integrations</h1>
+  <p class="lead">
+    Which clients have a payroll or HRIS feed, on which system, and who still
+    needs one. Tracked per client — nothing upstream carries this, so it is
+    maintained here.
+  </p>
+</div>
+
+<section class="fin-panel">
+  <div class="fin-summary-strip">
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Active clients</span>
+      <span class="fin-summary-value">{{ '{:,}'.format(summary.clients) }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">With an integration</span>
+      <span class="fin-summary-value num-pos">{{ '{:,}'.format(summary.with_integration) }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Still to set up</span>
+      <span class="fin-summary-value num-neg">{{ '{:,}'.format(summary.without_integration) }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">Payroll feeds</span>
+      <span class="fin-summary-value">{{ '{:,}'.format(summary.payroll) }}</span>
+    </div>
+    <div class="fin-summary-item">
+      <span class="fin-summary-label">HRIS feeds</span>
+      <span class="fin-summary-value">{{ '{:,}'.format(summary.hris) }}</span>
+    </div>
+  </div>
+
+  {% if summary.by_vendor %}
+  <p class="fin-note">
+    By system (clients):
+    {% for vendor, n in summary.by_vendor.items() %}
+      <strong>{{ vendor }}</strong> {{ n }}{% if not loop.last %} · {% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
+
+  {% if summary.unmatched_vendors %}
+  <p class="fin-note">
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    Not in the vendor catalogue, kept as typed:
+    <strong>{{ summary.unmatched_vendors | join(', ') }}</strong>.
+    Worth adding if they are real systems — otherwise reporting by vendor will
+    fragment.
+  </p>
+  {% endif %}
+</section>
+
+<section class="fin-panel">
+  <div class="fin-report-bar">
+    <form method="get" class="fin-field" style="flex-direction:row; align-items:center; gap:8px;">
+      <span class="fin-label">Show</span>
+      <select name="show" class="fin-select" onchange="this.form.submit()">
+        <option value="all" {% if show == 'all' %}selected{% endif %}>All clients</option>
+        <option value="with" {% if show == 'with' %}selected{% endif %}>With an integration</option>
+        <option value="without" {% if show == 'without' %}selected{% endif %}>Still to set up</option>
+      </select>
+      <noscript><button type="submit" class="btn-secondary">Show</button></noscript>
+    </form>
+    <span class="fin-note" style="margin:0;">{{ '{:,}'.format(rows | length) }} row(s)</span>
+  </div>
+
+  {% if rows %}
+  <div class="fin-table-wrap">
+    <table class="fin-table">
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>System</th>
+          <th>Role</th>
+          <th>Connection</th>
+          <th>Status</th>
+          <th>Since</th>
+          <th class="num">Lives</th>
+          <th class="num">Accounts</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            {{ r.client or '—' }}
+            {% if r.scoped_account %}
+            <div class="fin-muted">scoped to {{ r.scoped_account }}{% if r.scoped_oid %} ({{ r.scoped_oid }}){% endif %}</div>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.vendor %}
+              {{ r.vendor }}{% if r.vendor_unmatched %}
+                <i class="fa-solid fa-triangle-exclamation" title="Not in the vendor catalogue"></i>
+              {% endif %}
+            {% else %}<span class="fin-muted">none</span>{% endif %}
+          </td>
+          <td>
+            {% if r.role == 'payroll' %}<span class="fin-pill">Payroll</span>
+            {% elif r.role == 'hris' %}<span class="fin-pill">HRIS</span>
+            {% elif r.role == 'benefits' %}<span class="fin-pill">Benefits</span>
+            {% else %}—{% endif %}
+          </td>
+          <td>{{ r.connection_type | replace('_', ' ') if r.integration_id else '—' }}</td>
+          <td>{{ r.integration_status | replace('_', ' ') if r.integration_id else '—' }}</td>
+          <td>{{ r.effective_from or '—' }}</td>
+          <td class="num">{{ '{:,.0f}'.format(r.lives) if r.lives is not none else '' }}</td>
+          <td class="num">{{ r.active_accounts if r.active_accounts is not none else '' }}</td>
+          <td>
+            {% if r.integration_id %}
+            <form method="post"
+                  action="{{ url_for('financial.integrations_retire', integration_id=r.integration_id) }}"
+                  onsubmit="return confirm('Close this integration? It stays on record with an end date.');">
+              <button type="submit" class="btn-secondary">Close</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="fin-note">Nothing to show for this filter.</p>
+  {% endif %}
+</section>
+
+{% if clients %}
+<section class="fin-panel">
+  <h2><i class="fa-solid fa-sitemap"></i> By client</h2>
+  <p class="fin-note">
+    One row per client and system, with payroll and HRIS side by side when both exist.
+  </p>
+  <table class="fin-table">
+    <thead>
+      <tr><th>Client</th><th>System</th><th>Serves</th><th>Status</th><th>Since</th></tr>
+    </thead>
+    <tbody>
+      {% for c in clients %}
+      <tr>
+        <td>{{ c.client or '—' }}</td>
+        <td>{{ c.vendor or '—' }}</td>
+        <td>
+          {% if c.payroll %}<span class="fin-pill">Payroll</span>{% endif %}
+          {% if c.hris %}<span class="fin-pill">HRIS</span>{% endif %}
+        </td>
+        <td>{{ (c.statuses or '') | replace('_', ' ') }}</td>
+        <td>{{ c.since or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<div class="fin-layout">
+  <section class="fin-panel fin-form-panel">
+    <h2><i class="fa-solid fa-upload"></i> Import from a sheet</h2>
+    <p class="fin-note">
+      Seeds many at once. Needs a <strong>Client</strong> column and a
+      <strong>Vendor</strong>/<strong>System</strong> column. Also reads
+      <code>Role</code> (payroll / hris / benefits), <code>Status</code>
+      (stable, preparation, on trial, in discussion, maintenance),
+      <code>Effective from</code>, <code>Note</code>. Unmatched clients are
+      reported, never guessed at.
+    </p>
+    <p class="fin-audit">
+      <i class="fa-solid fa-clipboard-check"></i>
+      Process Street: mirror each import with a to-do step and an audit step.
+    </p>
+    <form method="post" action="{{ url_for('financial.integrations_import') }}"
+          enctype="multipart/form-data" class="fin-form">
+      <div class="fin-field">
+        <label class="fin-label" for="sheet">Spreadsheet (.xlsx or .csv)</label>
+        <input type="file" id="sheet" name="sheet" accept=".xlsx,.xls,.csv" required>
+      </div>
+      <div class="fin-actions">
+        <button type="submit" class="btn-primary">
+          <i class="fa-solid fa-file-import"></i> Import
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <section class="fin-panel fin-form-panel">
+    <h2><i class="fa-solid fa-plus"></i> Add one</h2>
+    <form method="post" action="{{ url_for('financial.integrations_add') }}" class="fin-form">
+      <div class="fin-field">
+        <label class="fin-label" for="client">Client</label>
+        <input type="text" id="client" name="client" required placeholder="Display name as in Biggest Clients">
+      </div>
+      <div class="fin-field">
+        <label class="fin-label" for="vendor">System</label>
+        <input type="text" id="vendor" name="vendor" list="vendor-list" required>
+        <datalist id="vendor-list">
+          {% for v in vendors %}<option value="{{ v.name }}">{% endfor %}
+        </datalist>
+        <span class="fin-hint">Not in the list? Type it anyway — it is kept and flagged for review.</span>
+      </div>
+      <div class="fin-field">
+        <label class="fin-label" for="role">Role</label>
+        <select id="role" name="role" class="fin-select">
+          {% for role in roles %}
+          <option value="{{ role }}">{{ role | capitalize }}</option>
+          {% endfor %}
+        </select>
+        <span class="fin-hint">Payroll and HRIS on the same system are two rows — add each role separately.</span>
+      </div>
+      <div class="fin-field">
+        <label class="fin-label" for="oid">Scope to one account (optional)</label>
+        <input type="text" id="oid" name="oid" placeholder="oid — leave blank for the whole client">
+      </div>
+      <div class="fin-field">
+        <label class="fin-label" for="connection_type">Connection</label>
+        <select id="connection_type" name="connection_type" class="fin-select">
+          {% for kind in connection_types %}
+          <option value="{{ kind }}" {% if kind == 'manual' %}selected{% endif %}>{{ kind | replace('_', ' ') }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="fin-field">
+        <label class="fin-label" for="status">Status</label>
+        <select id="status" name="status" class="fin-select">
+          {% for s in statuses %}
+          <option value="{{ s }}" {% if s == 'stable' %}selected{% endif %}>{{ s | replace('_', ' ') }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="fin-field">
+        <label class="fin-label" for="effective_from">Live since</label>
+        <input type="text" id="effective_from" name="effective_from" placeholder="YYYY-MM-DD">
+      </div>
+      <div class="fin-field">
+        <label class="fin-label" for="note">Note</label>
+        <input type="text" id="note" name="note">
+      </div>
+      <div class="fin-actions">
+        <button type="submit" class="btn-primary"><i class="fa-solid fa-plus"></i> Add</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+{% endblock %}

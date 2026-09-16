@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import pandas as pd
 
+from fin_services.account_integrations import create_integration
 from fin_services.revenue_reports import (
     EXCLUDED_INCOME_ACCOUNTS,
     biggest_clients,
     client_period_detail,
+    data_from_db,
+    filter_by_client_search,
+    filter_by_integration,
     report_from_db,
+    to_excel,
 )
 from tests.helpers import insert_batch, insert_revenue
 
@@ -155,3 +160,120 @@ def test_report_from_db_empty(conn):
     rep = report_from_db(conn)
     assert rep.empty
     assert rep.attrs["period"] is None
+
+
+def test_report_from_db_integration_flags_and_filters(conn):
+    batch = insert_batch(conn)
+    insert_revenue(
+        conn, period="2026-03", client_key="Acme", amount=100.0,
+        oid="1", import_id=batch, premium_split=50.0, lives_split=5.0,
+    )
+    insert_revenue(
+        conn, period="2026-03", client_key="Beta", amount=80.0,
+        oid="2", import_id=batch,
+    )
+    insert_revenue(
+        conn, period="2026-03", client_key="Gamma", amount=60.0,
+        oid="3", import_id=batch,
+    )
+    create_integration(conn, client="Acme", vendor_name="ADP", role="payroll", status="stable")
+    create_integration(
+        conn, client="Beta", vendor_name="Raw HRIS", role="hris", status="on_trial",
+    )
+    create_integration(
+        conn, client="Gamma", vendor_name="ADP", role="payroll", status="in_discussion",
+    )
+
+    rep = report_from_db(conn, "2026-03")
+    by_client = {row["Client"]: row for _, row in rep.iterrows()}
+    assert bool(by_client["Acme"]["Payroll"]) is True
+    assert bool(by_client["Acme"]["HRIS"]) is False
+    assert bool(by_client["Beta"]["Payroll"]) is False
+    assert bool(by_client["Beta"]["HRIS"]) is True
+    assert bool(by_client["Gamma"]["Payroll"]) is False
+    assert bool(by_client["Gamma"]["HRIS"]) is False
+
+    assert set(filter_by_integration(rep, "none")["Client"]) == {"Gamma"}
+    assert set(filter_by_integration(rep, "no_payroll")["Client"]) == {"Beta", "Gamma"}
+    assert set(filter_by_integration(rep, "no_hris")["Client"]) == {"Acme", "Gamma"}
+    assert set(filter_by_integration(rep, "all")["Client"]) == {"Acme", "Beta", "Gamma"}
+    assert set(filter_by_client_search(rep, "ac")["Client"]) == {"Acme"}
+    assert set(filter_by_client_search(rep, "")["Client"]) == {"Acme", "Beta", "Gamma"}
+
+
+def test_excel_client_sheet_writes_yes_no_flags(conn, tmp_path):
+    batch = insert_batch(conn)
+    insert_revenue(
+        conn, period="2026-03", client_key="Acme", amount=100.0,
+        oid="1", import_id=batch,
+    )
+    create_integration(conn, client="Acme", vendor_name="ADP", role="payroll", status="stable")
+    rep = report_from_db(conn, "2026-03")
+    path = tmp_path / "clients.xlsx"
+    to_excel(rep, path, period="2026-03", native_pivots=False)
+
+    from openpyxl import load_workbook
+    ws = load_workbook(path)["Revenue by Client"]
+    headers = [ws.cell(7, col).value for col in range(2, 12)]
+    assert headers[:4] == ["Client", "Advisor", "Payroll", "HRIS"]
+    assert ws.cell(8, 2).value == "Acme"
+    assert ws.cell(8, 4).value == "Yes"
+    assert ws.cell(8, 5).value == "No"
+
+    data = data_from_db(conn, "2026-03")
+    assert set(data["Payroll"]) == {"Yes"}
+    assert set(data["HRIS"]) == {"No"}
+    data_path = tmp_path / "with_data.xlsx"
+    to_excel(rep, data_path, period="2026-03", data=data, native_pivots=False)
+    data_headers = [c.value for c in load_workbook(data_path)["Data"][1]]
+    assert "Payroll" in data_headers
+    assert "HRIS" in data_headers
+    pay_col = data_headers.index("Payroll") + 1
+    hris_col = data_headers.index("HRIS") + 1
+    assert load_workbook(data_path)["Data"].cell(2, pay_col).value == "Yes"
+    assert load_workbook(data_path)["Data"].cell(2, hris_col).value == "No"
+
+
+def test_filter_by_client_search_matches_substring(conn):
+    batch = insert_batch(conn)
+    insert_revenue(
+        conn, period="2026-03", client_key="ADP Services", amount=10.0,
+        oid="1", import_id=batch,
+    )
+    insert_revenue(
+        conn, period="2026-03", client_key="New Gold", amount=20.0,
+        oid="2", import_id=batch,
+    )
+    rep = report_from_db(conn, "2026-03")
+    matched = filter_by_client_search(rep, "dp")
+    assert list(matched["Client"]) == ["ADP Services"]
+    assert matched.attrs["total_revenue"] == 10.0
+    assert list(filter_by_client_search(rep, "DP")["Client"]) == ["ADP Services"]
+
+
+def test_report_from_db_blanks_premium_when_metrics_are_missing(conn):
+    """A month with revenue but no vintage must not show today's premium as $0."""
+    batch = insert_batch(conn)
+    insert_revenue(
+        conn, period="2025-08", client_key="Acme", amount=100.0, import_id=batch,
+    )
+    rep = report_from_db(conn, "2025-08")
+    assert list(rep["Client"]) == ["Acme"]
+    assert rep.attrs["total_revenue"] == 100.0
+    assert pd.isna(rep["Premium*"].iloc[0])
+    assert pd.isna(rep["Lives*"].iloc[0])
+    assert pd.isna(rep["Revenue/Premium"].iloc[0])
+    assert pd.isna(rep["Revenue/Life"].iloc[0])
+
+
+def test_client_period_detail_blanks_premium_when_metrics_are_missing(conn):
+    batch = insert_batch(conn)
+    insert_revenue(
+        conn, period="2025-08", client_key="Acme", amount=100.0,
+        quantity=10.0, rate=10.0, product_code="ADMIN",
+        income_account="Admin Fees (earned on Premium)", import_id=batch,
+    )
+    detail = client_period_detail(conn, "2025-08", "Acme")
+    assert len(detail["buckets"]) == 1
+    assert detail["buckets"][0]["premium"] is None
+    assert detail["buckets"][0]["lives"] is None

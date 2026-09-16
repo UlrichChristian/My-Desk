@@ -41,6 +41,33 @@ When an employee receives a salary increase, a one-time catch-up journal entry i
 
 ---
 
+## MP-FIN — Financial Management App
+*In-app reminders live on each tool page. Mirror here and in Process Street: a to-do step and an audit step. No black-box automations.*
+
+### MP-FIN-01 — HRIS / Payroll integration import
+Hand-maintained. Nothing upstream names a vendor.
+
+**To-do:** Import the sheet (or add one row) on `/financial/integrations`. Unmatched clients are reported, never guessed.
+
+**Audit:** Coverage summary (clients with / without a feed, counts by vendor) matches the source list. Unmatched vendor names are either added to the catalogue or left flagged.
+
+### MP-FIN-02 — Monthly revenue import
+**To-do:** Upload drilldown + account list + accounts CSV on Biggest Clients. Import writes metrics only for the latest month (`metrics_mode=latest`).
+
+**Audit:** Period total and unresolved-row count vs the prior run. Premium/lives are expected blank before 2026-07.
+
+### MP-FIN-03 — Reference review
+**To-do:** Clear `/financial/reference-review` after each import (`status=review` product codes and income accounts).
+
+**Audit:** Queue count is zero, or remaining items have a reason to stay in review.
+
+### Parked (not this change)
+- Drop legacy `fin_db` tables after a month of real use.
+- Re-enter wiped Aug 2025 qty/rate fixes into `ingest_corrections` (values are not on disk).
+- Delete the duplicate `WFSteel_Deferred_#1` journal entry in QuickBooks.
+
+---
+
 ## MP-03 — Remittances
 *Links to: MP-04 Month End*
 

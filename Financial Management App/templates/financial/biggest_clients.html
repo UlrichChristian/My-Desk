@@ -18,27 +18,39 @@
   </p>
 </div>
 
-{% if report %}
+{% if period %}
 <section class="fin-panel">
   <div class="fin-report-bar">
-    <form method="get" class="fin-field" style="flex-direction:row; align-items:center; gap:8px;">
+    <form method="get" class="fin-field" style="flex-direction:row; align-items:center; gap:8px; flex-wrap:wrap;">
       <span class="fin-label">Month</span>
       <select name="period" class="fin-select" onchange="this.form.submit()">
         {% for p in periods %}
         <option value="{{ p }}" {% if p == period %}selected{% endif %}>{{ p }}</option>
         {% endfor %}
       </select>
+      <span class="fin-label">Integrations</span>
+      <select name="integration" class="fin-select" onchange="this.form.submit()">
+        <option value="all" {% if integration == 'all' %}selected{% endif %}>All clients</option>
+        <option value="no_payroll" {% if integration == 'no_payroll' %}selected{% endif %}>No payroll</option>
+        <option value="no_hris" {% if integration == 'no_hris' %}selected{% endif %}>No HRIS</option>
+        <option value="none" {% if integration == 'none' %}selected{% endif %}>No integration</option>
+      </select>
+      <span class="fin-label">Search</span>
+      <input type="search" name="q" id="client-search" class="fin-search"
+             value="{{ query or '' }}" placeholder="Client name…"
+             autocomplete="off" aria-label="Search clients by name">
       <noscript><button type="submit" class="btn-secondary">Show</button></noscript>
     </form>
     <div style="display:flex; align-items:center; gap:16px;">
-      <span class="fin-note" style="margin:0;">Total revenue: <strong>{{ total_revenue }}</strong></span>
-      <a class="btn-secondary" href="{{ url_for('financial.biggest_clients_export', period=period) }}">
+      <span class="fin-note" style="margin:0;">Total revenue: <strong id="biggest-clients-total">{{ total_revenue }}</strong></span>
+      <a class="btn-secondary" id="biggest-clients-export"
+         href="{{ url_for('financial.biggest_clients_export', period=period, integration=integration, q=query) }}">
         <i class="fa-solid fa-file-excel"></i> Export Excel
       </a>
     </div>
   </div>
 
-  <p class="fin-note" style="margin-top:0;">Click a client row to expand product/service detail by income type.</p>
+  <p class="fin-note" style="margin-top:0;">Click a client row to expand product/service detail by income type. Payroll and HRIS mark an active feed (stable, maintenance, trial, or preparation).</p>
 
   <div class="fin-report-scroll">
     <table class="fin-table fin-table-expandable" id="biggest-clients-table"
@@ -48,6 +60,8 @@
         <tr>
           <th>Client</th>
           <th>Advisor</th>
+          <th class="check">Payroll</th>
+          <th class="check">HRIS</th>
           <th class="num">Revenue</th>
           <th class="num">Premium*</th>
           <th class="num">Rev/Prem</th>
@@ -58,8 +72,9 @@
       </thead>
       <tbody>
         {% for r in report %}
-        <tr class="fin-expand-row" data-client="{{ r.client }}" tabindex="0" role="button"
-            aria-expanded="false">
+        <tr class="fin-expand-row" data-client="{{ r.client }}"
+            data-revenue="{{ r.revenue|replace(',', '') }}"
+            tabindex="0" role="button" aria-expanded="false">
           <td>
             <span class="fin-expand-toggle" aria-hidden="true">
               <i class="fa-solid fa-chevron-right"></i>
@@ -67,6 +82,14 @@
             {{ r.client }}
           </td>
           <td>{{ r.advisor }}</td>
+          <td class="check">
+            <input type="checkbox" disabled {% if r.has_payroll %}checked{% endif %}
+                   aria-label="Payroll integration for {{ r.client }}">
+          </td>
+          <td class="check">
+            <input type="checkbox" disabled {% if r.has_hris %}checked{% endif %}
+                   aria-label="HRIS integration for {{ r.client }}">
+          </td>
           <td class="num">{{ r.revenue }}</td>
           <td class="num">{{ r.premium }}</td>
           <td class="num">{{ r.rev_prem }}</td>
@@ -75,9 +98,19 @@
           <td class="num">{{ r.share }}</td>
         </tr>
         {% endfor %}
+        <tr id="client-search-empty" {% if report %}hidden{% endif %}>
+          <td colspan="10" class="fin-note">No clients match this filter.</td>
+        </tr>
       </tbody>
     </table>
   </div>
+  {% if period and period < '2026-07' %}
+  <p class="fin-note">
+    Premium and lives are blank before July 2026. The accounts CSV is a
+    current-month snapshot, so earlier ratios would be computed against
+    today's premium rather than that month's.
+  </p>
+  {% endif %}
 </section>
 {% endif %}
 
@@ -288,6 +321,72 @@
     e.preventDefault();
     toggleRow(row);
   });
+
+  var search = document.getElementById("client-search");
+  var emptyRow = document.getElementById("client-search-empty");
+  var totalEl = document.getElementById("biggest-clients-total");
+  var exportLink = document.getElementById("biggest-clients-export");
+  var originalTotal = totalEl ? totalEl.textContent : "";
+
+  function rowRevenue(row) {
+    var raw = row.getAttribute("data-revenue");
+    if (raw) {
+      var n = parseFloat(String(raw).replace(/,/g, ""));
+      if (!isNaN(n)) return n;
+    }
+    var cell = row.querySelector("td.num");
+    if (!cell) return 0;
+    var parsed = parseFloat((cell.textContent || "").replace(/,/g, "").trim());
+    return isNaN(parsed) ? 0 : parsed;
+  }
+
+  function formatTotal(n) {
+    return n.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  }
+
+  function applyClientSearch() {
+    if (!search) return;
+    var typed = (search.value || "").trim();
+    var q = typed.toLowerCase();
+    var rows = table.querySelectorAll("tr.fin-expand-row");
+    var visible = 0;
+    var total = 0;
+    var i;
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var name = (row.getAttribute("data-client") || "").toLowerCase();
+      var show = !q || name.indexOf(q) !== -1;
+      row.hidden = !show;
+      var detail = row.nextElementSibling;
+      if (detail && detail.classList.contains("fin-detail-row") && !show) {
+        detail.hidden = true;
+        row.classList.remove("is-expanded");
+        row.setAttribute("aria-expanded", "false");
+      }
+      if (show) {
+        visible += 1;
+        total += rowRevenue(row);
+      }
+    }
+    if (emptyRow) emptyRow.hidden = visible !== 0;
+    if (totalEl) totalEl.textContent = q ? formatTotal(total) : originalTotal;
+    if (exportLink) {
+      try {
+        var href = new URL(exportLink.getAttribute("href"), window.location.origin);
+        if (typed) href.searchParams.set("q", typed);
+        else href.searchParams.delete("q");
+        exportLink.setAttribute("href", href.pathname + href.search);
+      } catch (err) {}
+    }
+  }
+
+  if (search) {
+    search.addEventListener("input", applyClientSearch);
+    applyClientSearch();
+  }
 })();
 </script>
 {% endif %}

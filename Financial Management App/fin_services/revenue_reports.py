@@ -24,6 +24,13 @@ REPORT_COLUMNS = [
     "Lives*", "Revenue/Life", "Revenue Share",
 ]
 
+CLIENT_EXPORT_COLUMNS = [
+    "Client", "Advisor", "Payroll", "HRIS", "Revenue", "Premium*",
+    "Revenue/Premium", "Lives*", "Revenue/Life", "Revenue Share",
+]
+
+INTEGRATION_FILTERS = ("all", "no_payroll", "no_hris", "none")
+
 ADVISOR_COLUMNS = [
     "Advisor", "Premium", "Revenue", "Lives",
     "Revenue/Premium", "Revenue Share", "Cumulative Share",
@@ -37,8 +44,9 @@ DATA_COLUMNS = [
     "BillingSiteExport.SYSTEM ID", "AccountSiteExport.oid",
     "AccountSiteExport.livesCount", "AccountSiteExport.monthlyPremium",
     "AccountSiteExport.firstBilledDate", "AccountSiteExport.lastPaAccess",
-    "AccountSiteExport.consultingHouses", "AccountSiteExport.brokerList",
+    "AccountSiteExport.consultingHouses",     "AccountSiteExport.brokerList",
     "Client", "RowCount", "PremiumSplit", "LivesSplit",
+    "Payroll", "HRIS",
 ]
 
 # Non-client income buckets excluded from Biggest Clients / Change Report.
@@ -80,18 +88,24 @@ def _rollup(df: pd.DataFrame) -> pd.DataFrame:
         out.attrs["total_revenue"] = 0.0
         return out
     grp = df.groupby("client_key", dropna=False)
+    extras = {}
+    if "client_id" in df.columns:
+        extras["client_id"] = grp["client_id"].agg(_first_nonnull).values
     out = pd.DataFrame({
+        **extras,
         "Client": grp.size().index,
         "Advisor": grp["advisor"].agg(_first_nonnull).values,
         "Revenue": grp["amount"].sum().values,
-        "Premium*": grp["premium_split"].sum().values,
-        "Lives*": grp["lives_split"].sum().values,
+        # min_count=1 keeps a missing vintage as blank, not a fake $0 premium.
+        "Premium*": grp["premium_split"].sum(min_count=1).values,
+        "Lives*": grp["lives_split"].sum(min_count=1).values,
     })
     out["Revenue/Premium"] = out["Revenue"] / out["Premium*"].replace(0, pd.NA)
     out["Revenue/Life"] = out["Revenue"] / out["Lives*"].replace(0, pd.NA)
     total = out["Revenue"].sum()
     out["Revenue Share"] = out["Revenue"] / total if total else pd.NA
-    out = out[REPORT_COLUMNS].sort_values("Revenue", ascending=False).reset_index(drop=True)
+    ordered = [c for c in ("client_id",) if c in out.columns] + REPORT_COLUMNS
+    out = out[ordered].sort_values("Revenue", ascending=False).reset_index(drop=True)
     out.attrs["total_revenue"] = float(total) if total else 0.0
     return out
 
@@ -104,9 +118,9 @@ def _advisor_rollup(df: pd.DataFrame) -> pd.DataFrame:
     grp = df.groupby(df["advisor"].fillna("(blank)"), dropna=False)
     out = pd.DataFrame({
         "Advisor": grp.size().index,
-        "Premium": grp["premium_split"].sum().values,
+        "Premium": grp["premium_split"].sum(min_count=1).values,
         "Revenue": grp["amount"].sum().values,
-        "Lives": grp["lives_split"].sum().values,
+        "Lives": grp["lives_split"].sum(min_count=1).values,
     })
     out["Revenue/Premium"] = out["Revenue"] / out["Premium"].replace(0, pd.NA)
     total = out["Revenue"].sum()
@@ -143,7 +157,7 @@ def biggest_clients(enriched: pd.DataFrame, period: str | None = None) -> pd.Dat
 
 def available_periods(conn) -> list[str]:
     return [r[0] for r in conn.execute(
-        "SELECT DISTINCT period FROM fact_revenue WHERE period IS NOT NULL ORDER BY period DESC"
+        "SELECT DISTINCT period FROM revenue_lines WHERE period IS NOT NULL ORDER BY period DESC"
     )]
 
 
@@ -151,9 +165,11 @@ UNMAPPED_CLIENT_LABEL = "(unmapped)"
 
 
 def client_period_detail(conn, period: str, client_key: str) -> dict:
-    """Income-bucket breakdown for one client in one period (Biggest Clients expand)."""
-    placeholders = ",".join("?" * len(EXCLUDED_INCOME_ACCOUNTS))
-    exclude = tuple(sorted(EXCLUDED_INCOME_ACCOUNTS))
+    """Income-bucket breakdown for one client in one period (Biggest Clients expand).
+
+    Built on ``_period_frame`` so the exclusion rule and the premium/lives split
+    are defined in exactly one place.
+    """
     unmapped = (
         client_key is None
         or (isinstance(client_key, float) and pd.isna(client_key))
@@ -161,61 +177,192 @@ def client_period_detail(conn, period: str, client_key: str) -> dict:
     )
     display = UNMAPPED_CLIENT_LABEL if unmapped else client_key
 
-    if unmapped:
-        sql = (
-            "SELECT income_account, product_code, "
-            "SUM(amount) AS amount, SUM(quantity) AS quantity, "
-            "SUM(lives_split) AS lives, SUM(premium_split) AS premium "
-            "FROM fact_revenue "
-            f"WHERE period = ? AND client_key IS NULL "
-            f"AND COALESCE(income_account, '') NOT IN ({placeholders}) "
-            "GROUP BY income_account, product_code "
-            "ORDER BY income_account ASC, ABS(SUM(amount)) DESC"
+    df = _period_frame(conn, period)
+    if df.empty:
+        return {"period": period, "client": display, "buckets": []}
+
+    df = df[df["client_key"].isna()] if unmapped else df[df["client_key"] == client_key]
+    if df.empty:
+        return {"period": period, "client": display, "buckets": []}
+
+    grouped = (
+        df.assign(
+            income_account=df["income_account"].fillna("(blank)"),
+            product_code=df["product_code"].fillna("(blank)"),
         )
-        params = (period, *exclude)
-    else:
-        sql = (
-            "SELECT income_account, product_code, "
-            "SUM(amount) AS amount, SUM(quantity) AS quantity, "
-            "SUM(lives_split) AS lives, SUM(premium_split) AS premium "
-            "FROM fact_revenue "
-            f"WHERE period = ? AND client_key = ? "
-            f"AND COALESCE(income_account, '') NOT IN ({placeholders}) "
-            "GROUP BY income_account, product_code "
-            "ORDER BY income_account ASC, ABS(SUM(amount)) DESC"
+        .groupby(["income_account", "product_code"], dropna=False)
+        .agg(
+            amount=("amount", "sum"),
+            quantity=("quantity", lambda s: s.sum(min_count=1)),
+            lives=("lives_split", lambda s: s.sum(min_count=1)),
+            premium=("premium_split", lambda s: s.sum(min_count=1)),
         )
-        params = (period, client_key, *exclude)
+        .reset_index()
+    )
+    grouped = grouped.reindex(
+        grouped["amount"].abs().sort_values(ascending=False).index
+    ).sort_values("income_account", kind="stable")
 
     buckets = []
-    for r in conn.execute(sql, params).fetchall():
-        d = dict(r)
-        amt = float(d["amount"] or 0)
-        qty = d["quantity"]
-        qty_f = float(qty) if qty is not None else None
-        rate = (amt / qty_f) if qty_f not in (None, 0) else None
+    for r in grouped.itertuples(index=False):
+        amt = float(r.amount or 0)
+        qty_f = None if pd.isna(r.quantity) else float(r.quantity)
         buckets.append({
-            "income_account": d["income_account"] or "(blank)",
-            "product_code": d["product_code"] or "(blank)",
+            "income_account": r.income_account,
+            "product_code": r.product_code,
             "amount": amt,
             "quantity": qty_f,
             "certs": abs(qty_f) if qty_f is not None else None,
-            "rate": rate,
-            "lives": float(d["lives"]) if d["lives"] is not None else None,
-            "premium": float(d["premium"]) if d["premium"] is not None else None,
+            "rate": (amt / qty_f) if qty_f not in (None, 0) else None,
+            "lives": None if pd.isna(r.lives) else float(r.lives),
+            "premium": None if pd.isna(r.premium) else float(r.premium),
         })
 
     return {"period": period, "client": display, "buckets": buckets}
 
 
+# Premium and lives are NOT stored on the fact any more. They live on
+# account_period_metrics keyed by (account, month), and the per-row split that
+# stops an Excel pivot multiply-counting is derived here at query time. Storing
+# it was what stamped September 2026 premium onto 2025-08 rows.
+_PERIOD_FRAME_SQL = """
+WITH line_counts AS (
+    SELECT account_id, period, COUNT(*) AS n
+    FROM revenue_lines
+    WHERE period = :period
+    GROUP BY account_id, period
+)
+SELECT
+    c.id                                             AS client_id,
+    COALESCE(c.display_name, rl.client_key_raw)      AS client_key,
+    rl.advisor_label                                 AS advisor,
+    rl.consulting_house,
+    rl.amount,
+    rl.quantity,
+    rl.rate,
+    CASE WHEN lc.n > 0 THEN m.premium * 1.0 / lc.n END AS premium_split,
+    CASE WHEN lc.n > 0 THEN m.lives   * 1.0 / lc.n END AS lives_split,
+    m.premium                                        AS account_premium,
+    m.lives                                          AS account_lives,
+    m.source                                         AS metric_source,
+    lc.n                                             AS account_row_count,
+    a.legal_name,
+    a.first_billed_on,
+    a.last_pa_access_on,
+    rl.txn_date, rl.txn_type, rl.invoice_no, rl.name_raw, rl.memo,
+    rl.income_account_raw                            AS income_account,
+    rl.product_code_raw                              AS product_code,
+    rl.oid
+FROM revenue_lines rl
+LEFT JOIN accounts a               ON a.id = rl.account_id
+LEFT JOIN clients c                ON c.id = rl.client_id
+LEFT JOIN income_accounts ia       ON ia.id = rl.income_account_id
+LEFT JOIN line_counts lc           ON lc.account_id = rl.account_id AND lc.period = rl.period
+LEFT JOIN account_period_metrics m ON m.account_id = rl.account_id AND m.period = rl.period
+WHERE rl.period = :period
+  AND COALESCE(ia.exclude_from_reports, 0) = 0
+"""
+
+
 def _period_frame(conn, period: str) -> pd.DataFrame:
-    placeholders = ",".join("?" * len(EXCLUDED_INCOME_ACCOUNTS))
-    rows = conn.execute(
-        "SELECT client_key, advisor_key AS advisor, amount, premium_split, lives_split, "
-        "txn_date, txn_type, invoice_no, name_raw, memo, income_account, product_code, oid "
-        f"FROM fact_revenue WHERE period = ? AND COALESCE(income_account, '') NOT IN ({placeholders})",
-        (period, *sorted(EXCLUDED_INCOME_ACCOUNTS)),
-    ).fetchall()
+    rows = conn.execute(_PERIOD_FRAME_SQL, {"period": period}).fetchall()
     return pd.DataFrame([dict(r) for r in rows])
+
+
+def _yes_no_for_ids(client_ids, flags: dict, role: str) -> list[str]:
+    out = []
+    for cid in client_ids:
+        if cid is None or (isinstance(cid, float) and pd.isna(cid)):
+            out.append("No")
+            continue
+        out.append("Yes" if flags.get(int(cid), {}).get(role) else "No")
+    return out
+
+
+def attach_integration_flags(report: pd.DataFrame, conn) -> pd.DataFrame:
+    """Stamp Payroll / HRIS booleans from account_integrations onto a rollup."""
+    from fin_services.account_integrations import client_role_flags
+
+    out = report.copy()
+    n = len(out)
+    flags = client_role_flags(conn)
+    payroll, hris = [], []
+    ids = out["client_id"] if "client_id" in out.columns else [None] * n
+    for cid in ids:
+        if cid is None or (isinstance(cid, float) and pd.isna(cid)):
+            payroll.append(False)
+            hris.append(False)
+            continue
+        entry = flags.get(int(cid), {})
+        payroll.append(bool(entry.get("payroll")))
+        hris.append(bool(entry.get("hris")))
+    out["Payroll"] = payroll
+    out["HRIS"] = hris
+    out.attrs.update(dict(report.attrs))
+    return out
+
+
+def filter_by_integration(report: pd.DataFrame, integration: str | None = "all") -> pd.DataFrame:
+    """Keep clients missing a payroll feed, an HRIS feed, or both."""
+    key = integration if integration in INTEGRATION_FILTERS else "all"
+    attrs = dict(report.attrs)
+    if key == "all" or report.empty:
+        out = report.copy()
+        out.attrs.update(attrs)
+        return out
+    payroll = report["Payroll"] if "Payroll" in report.columns else pd.Series(False, index=report.index)
+    hris = report["HRIS"] if "HRIS" in report.columns else pd.Series(False, index=report.index)
+    if key == "no_payroll":
+        mask = ~payroll.fillna(False).astype(bool)
+    elif key == "no_hris":
+        mask = ~hris.fillna(False).astype(bool)
+    else:
+        mask = ~payroll.fillna(False).astype(bool) & ~hris.fillna(False).astype(bool)
+    out = report.loc[mask].copy()
+    out.attrs.update(attrs)
+    if "Revenue" in out.columns and len(out):
+        total = float(out["Revenue"].sum())
+        out.attrs["total_revenue"] = total
+        out["Revenue Share"] = out["Revenue"] / total if total else pd.NA
+    else:
+        out.attrs["total_revenue"] = 0.0
+    return out.reset_index(drop=True)
+
+
+def filter_by_client_search(report: pd.DataFrame, query: str | None) -> pd.DataFrame:
+    """Keep clients whose name contains ``query`` (case-insensitive, literal)."""
+    needle = (query or "").strip()
+    attrs = dict(report.attrs)
+    if not needle or report.empty or "Client" not in report.columns:
+        out = report.copy()
+        out.attrs.update(attrs)
+        return out
+    mask = report["Client"].fillna("").astype(str).str.contains(
+        needle, case=False, regex=False, na=False,
+    )
+    out = report.loc[mask].copy()
+    out.attrs.update(attrs)
+    if "Revenue" in out.columns and len(out):
+        total = float(out["Revenue"].sum())
+        out.attrs["total_revenue"] = total
+        out["Revenue Share"] = out["Revenue"] / total if total else pd.NA
+    else:
+        out.attrs["total_revenue"] = 0.0
+    return out.reset_index(drop=True)
+
+
+def _client_export_frame(report: pd.DataFrame) -> pd.DataFrame:
+    """Client sheet with Payroll / HRIS as Yes/No, no surrogate id."""
+    out = report.copy()
+    n = len(out)
+    for col in ("Payroll", "HRIS"):
+        if col not in out.columns:
+            out[col] = [False] * n
+        out[col] = [
+            "Yes" if bool(v) and not (isinstance(v, float) and pd.isna(v)) else "No"
+            for v in out[col]
+        ]
+    return out[CLIENT_EXPORT_COLUMNS]
 
 
 def report_from_db(conn, period: str | None = None) -> pd.DataFrame:
@@ -225,9 +372,10 @@ def report_from_db(conn, period: str | None = None) -> pd.DataFrame:
     if period is None:
         empty = pd.DataFrame(columns=REPORT_COLUMNS)
         empty.attrs["period"] = None
-        return empty
+        empty.attrs["total_revenue"] = 0.0
+        return attach_integration_flags(empty, conn)
     df = _period_frame(conn, period)
-    rep = _rollup(df)
+    rep = attach_integration_flags(_rollup(df), conn)
     rep.attrs["period"] = period
     return rep
 
@@ -238,9 +386,12 @@ def data_from_db(conn, period: str) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=DATA_COLUMNS)
 
-    counts = df.groupby("oid")["amount"].transform("size")
-    lives = df["lives_split"] * counts
-    premium = df["premium_split"] * counts
+    # Read the account's real lives/premium rather than reconstructing them from
+    # the split — the split's denominator counts every line for the account in
+    # the period, including income accounts this report excludes.
+    counts = df["account_row_count"]
+    lives = df["account_lives"]
+    premium = df["account_premium"]
 
     out = pd.DataFrame({
         "Transaction date": pd.to_datetime(df["txn_date"], errors="coerce"),
@@ -256,21 +407,26 @@ def data_from_db(conn, period: str) -> pd.DataFrame:
         "Product/Service": df["product_code"],
         "PreCustomer": pd.NA,
         "BillingSiteExport.NAME": pd.NA,
-        "BillingSiteExport.LEGAL NAME": pd.NA,
+        "BillingSiteExport.LEGAL NAME": df["legal_name"],
         "BillingSiteExport.GROUP ID": df["client_key"],
         "BillingSiteExport.SYSTEM ID": pd.NA,
         "AccountSiteExport.oid": df["oid"],
         "AccountSiteExport.livesCount": lives,
         "AccountSiteExport.monthlyPremium": premium,
-        "AccountSiteExport.firstBilledDate": pd.NA,
-        "AccountSiteExport.lastPaAccess": pd.NA,
-        "AccountSiteExport.consultingHouses": pd.NA,
+        "AccountSiteExport.firstBilledDate": df["first_billed_on"],
+        "AccountSiteExport.lastPaAccess": df["last_pa_access_on"],
+        "AccountSiteExport.consultingHouses": df["consulting_house"],
         "AccountSiteExport.brokerList": df["advisor"],
         "Client": df["client_key"],
         "RowCount": counts,
         "PremiumSplit": pd.to_numeric(df["premium_split"], errors="coerce"),
         "LivesSplit": pd.to_numeric(df["lives_split"], errors="coerce"),
     })
+    from fin_services.account_integrations import client_role_flags
+    flags = client_role_flags(conn)
+    ids = df["client_id"] if "client_id" in df.columns else [None] * len(df)
+    out["Payroll"] = _yes_no_for_ids(ids, flags, "payroll")
+    out["HRIS"] = _yes_no_for_ids(ids, flags, "hris")
     return out[DATA_COLUMNS]
 
 
@@ -316,6 +472,7 @@ def _write_data_sheet(ws, data: pd.DataFrame):
         "H": 10, "I": 10, "J": 20, "K": 16, "L": 16, "M": 28, "N": 28,
         "O": 14, "P": 16, "Q": 10, "R": 12, "S": 14, "T": 14, "U": 14,
         "V": 18, "W": 16, "X": 16, "Y": 10, "Z": 12, "AA": 10,
+        "AB": 10, "AC": 10,
     }
     for letter, width in widths.items():
         ws.column_dimensions[letter].width = width
@@ -451,10 +608,20 @@ def _build_native_pivots(path: Path, title: str) -> bool:
             broker = pt_c.PivotFields("AccountSiteExport.brokerList")
             broker.Orientation = xlRowField
             broker.Caption = "Advisor"
+            extra_row_fields = []
+            for extra in ("Payroll", "HRIS"):
+                try:
+                    fld = pt_c.PivotFields(extra)
+                    fld.Orientation = xlRowField
+                    extra_row_fields.append(fld)
+                except Exception:
+                    pass
             try:
                 pt_c.RowAxisLayout(xlTabularRow)
                 pt_c.PivotFields("Client").Subtotals = [False] * 12
                 broker.Subtotals = [False] * 12
+                for fld in extra_row_fields:
+                    fld.Subtotals = [False] * 12
             except Exception:
                 pass
             add_sum(pt_c, "Amount", "Revenue", "#,##0.00")
@@ -544,6 +711,7 @@ def to_excel(
     period: str | None = None,
     data: pd.DataFrame | None = None,
     advisor_report: pd.DataFrame | None = None,
+    native_pivots: bool = True,
 ) -> Path:
     """Write Data table + Client/Advisor sheets; upgrade to native PivotTables when Excel is available."""
     path = Path(path)
@@ -551,6 +719,7 @@ def to_excel(
     period = period or report.attrs.get("period")
     title = _period_title(period)
     report = report if report is not None else pd.DataFrame(columns=REPORT_COLUMNS)
+    client_sheet = _client_export_frame(report)
     advisor_report = (
         advisor_report if advisor_report is not None
         else pd.DataFrame(columns=ADVISOR_COLUMNS)
@@ -566,10 +735,13 @@ def to_excel(
         ws_client,
         title,
         "Revenue by Client",
-        list(REPORT_COLUMNS),
-        report,
-        {2: "#,##0.00", 3: "#,##0.00", 4: "0.00%", 5: "#,##0", 6: "#,##0.00", 7: "0.00%"},
-        {"B": 22.27, "C": 18.45, "D": 10, "E": 11, "F": 14.8, "G": 8, "H": 11, "I": 12},
+        list(CLIENT_EXPORT_COLUMNS),
+        client_sheet,
+        {4: "#,##0.00", 5: "#,##0.00", 6: "0.00%", 7: "#,##0", 8: "#,##0.00", 9: "0.00%"},
+        {
+            "B": 22.27, "C": 18.45, "D": 10, "E": 10, "F": 18.45,
+            "G": 10, "H": 11, "I": 11, "J": 14.8, "K": 12,
+        },
     )
 
     ws_adv = wb.create_sheet("Revenue by Advisor")
@@ -594,21 +766,35 @@ def to_excel(
 
     wb.save(path)
 
-    if not data.empty:
+    # A missing-feed filter is a client-sheet view; native pivots rebuild from
+    # the full Data table and would drop both the filter and the Yes/No columns.
+    if native_pivots and not data.empty:
         _build_native_pivots(path, title)
 
     return path
 
 
-def export_period(conn, path: str | Path, period: str | None = None) -> Path:
+def export_period(
+    conn,
+    path: str | Path,
+    period: str | None = None,
+    integration: str | None = "all",
+    query: str | None = None,
+) -> Path:
     """Build client + advisor rollups and Data sheet for a period, then write Excel."""
     periods = available_periods(conn)
     period = _pick_period(periods, period)
     if period is None:
         raise ValueError("No revenue data to export.")
     frame = _period_frame(conn, period)
-    report = _rollup(frame)
+    report = attach_integration_flags(_rollup(frame), conn)
+    report = filter_by_integration(report, integration)
+    report = filter_by_client_search(report, query)
     report.attrs["period"] = period
     advisor = _advisor_rollup(frame)
     data = data_from_db(conn, period)
-    return to_excel(report, path, period=period, data=data, advisor_report=advisor)
+    use_native = (integration or "all") == "all" and not (query or "").strip()
+    return to_excel(
+        report, path, period=period, data=data, advisor_report=advisor,
+        native_pivots=use_native,
+    )

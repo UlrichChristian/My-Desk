@@ -211,6 +211,16 @@
   font-variant-numeric: tabular-nums;
 }
 
+.fin-table th.check,
+.fin-table td.check {
+  text-align: center;
+  width: 4.5em;
+}
+
+.fin-table td.check input {
+  pointer-events: none;
+}
+
 .fin-table td.num-pos,
 .fin-summary-value.num-pos {
   text-align: right;
@@ -273,6 +283,14 @@
   padding: 7px 10px;
   border: 1px solid var(--ea-border);
   border-radius: var(--ea-radius-sm);
+}
+
+.fin-search {
+  font: inherit;
+  padding: 7px 10px;
+  border: 1px solid var(--ea-border);
+  border-radius: var(--ea-radius-sm);
+  min-width: 12em;
 }
 
 .fin-table-expandable .fin-expand-row {
@@ -413,3 +431,53 @@
 .fin-arrow-down .fin-arrow-curr {
   color: #b42318;
 }
+
+/* --- HRIS / payroll integrations ------------------------------------- */
+
+/* Wide tables scroll inside their own box rather than the page. */
+.fin-table-wrap {
+  overflow-x: auto;
+}
+
+/* Role markers on an integration row (Payroll / HRIS / Benefits). One system
+   can serve more than one, so a row often carries several. */
+.fin-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  margin-right: 4px;
+  font-size: 8.5pt;
+  line-height: 1.6;
+  white-space: nowrap;
+  color: var(--ea-blue);
+  background: color-mix(in srgb, var(--ea-blue) 10%, white);
+  border: 1px solid color-mix(in srgb, var(--ea-blue) 25%, white);
+  border-radius: 999px;
+}
+
+.fin-muted {
+  color: var(--ea-text-secondary);
+}
+
+.fin-table .fa-triangle-exclamation {
+  color: #b54708;
+  margin-left: 4px;
+}
+
+.fin-review-table .fin-select,
+.fin-input-compact {
+  font: inherit;
+  font-size: 9pt;
+  padding: 4px 6px;
+  max-width: 140px;
+}
+
+.fin-input-compact {
+  width: 8em;
+  border: 1px solid var(--ea-border);
+  border-radius: var(--ea-radius-sm);
+}
+
+.fin-inline-form {
+  margin: 0;
+}
+

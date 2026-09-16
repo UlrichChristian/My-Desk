@@ -102,12 +102,14 @@ def test_enrich_joins_system_id_and_oid():
     assert list(out["client_key"].unique()) == ["New Gold"]
     assert list(out["oid"].astype(str).unique()) == ["2850"]
     assert out["advisor"].iloc[0] == "Jane Advisor"
-    # Two lines for same oid+period → premium/lives split in half each
-    assert out["premium_split"].tolist() == [500.0, 500.0]
-    assert out["lives_split"].tolist() == [5.0, 5.0]
+    # premium/lives are no longer joined here — they live on
+    # account_period_metrics, keyed by month, and the split is derived at query
+    # time. Computing it here is what stamped today's premium onto old periods.
+    assert "premium_split" not in out.columns
+    assert "lives_split" not in out.columns
 
 
-def test_enrich_name_override():
+def test_enrich_name_correction():
     drilldown = pd.DataFrame([
         {
             "name": "Odd Name",
@@ -133,12 +135,18 @@ def test_enrich_name_override():
         drilldown,
         account_list,
         accounts,
-        overrides=[{"match_type": "name", "match_value": "Odd Name", "client_key": "Fixed"}],
+        corrections=[{
+            "id": 1,
+            "match_name": "Odd Name",
+            "target_field": "client_key",
+            "strategy": "set_value",
+            "target_text": "Fixed",
+        }],
     )
     assert out["client_key"].iloc[0] == "Fixed"
 
 
-def test_enrich_memo_contains_override():
+def test_enrich_memo_contains_correction():
     drilldown = pd.DataFrame([
         {
             "name": None,
@@ -164,10 +172,13 @@ def test_enrich_memo_contains_override():
         drilldown,
         account_list,
         accounts,
-        overrides=[{
-            "match_type": "memo_contains",
-            "match_value": "Recognized Deferred Revenue - GST applied on DES invoice",
-            "client_key": "WF Steel and Crane",
+        corrections=[{
+            "id": 1,
+            "match_memo_contains": "Recognized Deferred Revenue - GST applied on DES invoice",
+            "target_field": "client_key",
+            "strategy": "set_value",
+            "target_text": "WF Steel and Crane",
         }],
     )
     assert out["client_key"].iloc[0] == "WF Steel and Crane"
+    assert out.attrs["correction_counts"] == {1: 1}

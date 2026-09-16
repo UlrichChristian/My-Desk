@@ -3,12 +3,12 @@
 Flask-free: takes a DB connection and returns summary + client-level DataFrame
 so the web UI, Excel export, and a future MCP tool can share the same engine.
 
-Driver math for a matched (client_key, product_code) pair with usable qty/rate:
+Driver math for a matched (client_key, benefit) pair with usable qty/rate:
   Certs (volume) = (q1 - q0) * r0
   Price          = q1 * (r1 - r0)
   (Note: Certs + Price = q1*r1 - q0*r0 when amount ≈ qty*rate.)
 
-Unmatched product lines on an existing client → Benefits (mix).
+Unmatched benefit lines on an existing client → Benefits (mix).
 Rows missing qty/rate → Other (so the bridge still ties to Δ revenue).
 """
 
@@ -22,7 +22,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from fin_services.revenue_reports import EXCLUDED_INCOME_ACCOUNTS
 
 CLIENT_COLUMNS = [
     "Client", "Advisor",
@@ -73,7 +72,7 @@ def _period_label(period: str | None) -> str:
 def available_revenue_periods(conn) -> list[str]:
     return [
         r[0] for r in conn.execute(
-            "SELECT DISTINCT period FROM fact_revenue WHERE period IS NOT NULL ORDER BY period DESC"
+            "SELECT DISTINCT period FROM revenue_lines WHERE period IS NOT NULL ORDER BY period DESC"
         )
     ]
 
@@ -105,14 +104,32 @@ def resolve_prior_period(period: str, prior_period: str | None, present) -> str 
     return default_prior_period(period, present_set)
 
 
+# Match on the benefit's identity, not its raw code. Admin-EH, Admin-EH(13),
+# Admin-EH(14) and Admin-EH(15) are the same benefit sold under four HST
+# jurisdictions; matching on the raw string would book a dropped line plus a new
+# line whenever an account's tax treatment changed. Channel and fee kind stay in
+# the key — Comm-EH is a commission, not an admin fee, and ASO is not direct.
+_AGGREGATE_SQL = """
+SELECT
+    COALESCE(c.display_name, rl.client_key_raw) AS client_key,
+    COALESCE(
+        p.channel || '/' || p.fee_kind || '/' || p.benefit_code,
+        rl.product_code_raw
+    )                                           AS product_code,
+    rl.advisor_label                            AS advisor_key,
+    rl.amount, rl.quantity, rl.rate
+FROM revenue_lines rl
+LEFT JOIN clients c          ON c.id = rl.client_id
+LEFT JOIN products p         ON p.id = rl.product_id
+LEFT JOIN income_accounts ia ON ia.id = rl.income_account_id
+WHERE rl.period = ?
+  AND COALESCE(ia.exclude_from_reports, 0) = 0
+"""
+
+
 def _aggregate_period(conn, period: str) -> pd.DataFrame:
-    """One row per (client_key, product_code) for a period with amount/qty/rate."""
-    placeholders = ",".join("?" * len(EXCLUDED_INCOME_ACCOUNTS))
-    rows = conn.execute(
-        "SELECT client_key, product_code, advisor_key, amount, quantity, rate "
-        f"FROM fact_revenue WHERE period = ? AND COALESCE(income_account, '') NOT IN ({placeholders})",
-        (period, *sorted(EXCLUDED_INCOME_ACCOUNTS)),
-    ).fetchall()
+    """One row per (client_key, benefit) for a period with amount/qty/rate."""
+    rows = conn.execute(_AGGREGATE_SQL, (period,)).fetchall()
     raw = pd.DataFrame([dict(r) for r in rows])
     if raw.empty:
         return pd.DataFrame(columns=[
@@ -356,35 +373,34 @@ def _is_unmapped_client(client_key) -> bool:
     )
 
 
+_CLIENT_LINES_SQL = """
+SELECT rl.period, rl.txn_date, rl.txn_type, rl.invoice_no, rl.name_raw, rl.memo,
+       rl.product_code_raw   AS product_code,
+       rl.income_account_raw AS income_account,
+       rl.quantity, rl.rate, rl.amount
+FROM revenue_lines rl
+LEFT JOIN clients c          ON c.id = rl.client_id
+LEFT JOIN income_accounts ia ON ia.id = rl.income_account_id
+WHERE rl.period IN ({period_ph})
+  AND COALESCE(ia.exclude_from_reports, 0) = 0
+  AND {client_clause}
+ORDER BY rl.period ASC, rl.income_account_raw ASC, rl.product_code_raw ASC, rl.txn_date ASC
+"""
+
+
 def _fetch_client_lines(conn, periods: list[str], client_key: str) -> list[dict]:
-    """Raw fact_revenue lines for a client in the given periods (exclusions applied)."""
+    """Revenue lines for a client across the given periods (exclusions applied).
+
+    The drilldown shows the *raw* product code, not the grouped benefit key —
+    when a line moves between HST jurisdictions you want to see that here.
+    """
     if not periods:
         return []
-    placeholders = ",".join("?" * len(EXCLUDED_INCOME_ACCOUNTS))
     period_ph = ",".join("?" * len(periods))
-    exclude = tuple(sorted(EXCLUDED_INCOME_ACCOUNTS))
     unmapped = _is_unmapped_client(client_key)
-
-    if unmapped:
-        sql = (
-            "SELECT period, txn_date, txn_type, invoice_no, name_raw, memo, "
-            "product_code, income_account, quantity, rate, amount "
-            "FROM fact_revenue "
-            f"WHERE period IN ({period_ph}) AND client_key IS NULL "
-            f"AND COALESCE(income_account, '') NOT IN ({placeholders}) "
-            "ORDER BY period ASC, income_account ASC, product_code ASC, txn_date ASC"
-        )
-        params = (*periods, *exclude)
-    else:
-        sql = (
-            "SELECT period, txn_date, txn_type, invoice_no, name_raw, memo, "
-            "product_code, income_account, quantity, rate, amount "
-            "FROM fact_revenue "
-            f"WHERE period IN ({period_ph}) AND client_key = ? "
-            f"AND COALESCE(income_account, '') NOT IN ({placeholders}) "
-            "ORDER BY period ASC, income_account ASC, product_code ASC, txn_date ASC"
-        )
-        params = (*periods, client_key, *exclude)
+    client_clause = "rl.client_id IS NULL" if unmapped else "c.display_name = ?"
+    sql = _CLIENT_LINES_SQL.format(period_ph=period_ph, client_clause=client_clause)
+    params = tuple(periods) if unmapped else (*periods, client_key)
 
     rows = []
     for r in conn.execute(sql, params).fetchall():
