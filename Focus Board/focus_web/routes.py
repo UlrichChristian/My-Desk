@@ -260,10 +260,6 @@ def board():
         ]
         recurring_groups.append(group)
 
-    # Pipeline = all not-yet-active tasks (placed=0), with or without a project
-    pipeline = [_enrich_task(conn, dict(r)) for r in task_svc.list_unplaced(conn)]
-    pipeline += [_enrich_task(conn, dict(r)) for r in task_svc.list_unplaced_by_project(conn)]
-
     completed = []
     for t in task_svc.list_recently_completed(conn, 8):
         row = dict(t)
@@ -307,7 +303,6 @@ def board():
         active_type_meta=_ACTIVE_TYPE_META,
         project_groups=project_groups,
         recurring_groups=recurring_groups,
-        pipeline=pipeline,
         completed=completed,
         recurring=recurring,
         active_timer=active_timer,
@@ -331,7 +326,7 @@ def set_band(task_id):
     """Move lifecycle band; an optional To-do quadrant updates explicit flags."""
     data = _request_json()
     band = data.get("band")
-    if band not in ("today", "active", "pipeline"):
+    if band not in ("today", "active"):
         abort(400)
     quadrant = data.get("quadrant")
     quadrant_flags = {
@@ -369,24 +364,17 @@ def add_task():
     project_id = _int_or_none(request.form.get("project_id"))
     parent_id = _int_or_none(request.form.get("parent_id"))
 
-    # Inherit placement from parent when adding subtask via tile
+    # Inherit flags/project from parent when adding a subtask via tile.
     inherit_parent = request.form.get("inherit_parent")
     if inherit_parent and parent_id:
         parent = task_svc.get_task(conn, parent_id)
         if parent:
             important = parent["important"]
             urgent = parent["urgent"]
-            placed = parent["placed"]
             if parent["is_recurring"]:
                 is_recurring = 1
             if not project_id:
                 project_id = parent["project_id"]
-        else:
-            placed = 0
-    else:
-        # Important/urgent are flags only — new tasks land in Pipeline,
-        # unless Activate was requested (e.g. add from a project group).
-        placed = 1 if request.form.get("activate") else 0
 
     category_id = _resolve_category_id(conn)
 
@@ -397,8 +385,8 @@ def add_task():
             )
             if redirect_note:
                 flash(redirect_note, "success")
-            important, urgent, placed = task_svc.placement_from_recurring_root(
-                conn, parent_id, important=important, urgent=urgent, placed=placed
+            important, urgent = task_svc.placement_from_recurring_root(
+                conn, parent_id, important=important, urgent=urgent
             )
     except ValueError as exc:
         flash(str(exc), "error")
@@ -410,7 +398,6 @@ def add_task():
         description=request.form.get("description") or None,
         important=important,
         urgent=urgent,
-        placed=placed,
         category_id=category_id,
         project_id=project_id,
         parent_id=parent_id,
@@ -491,7 +478,7 @@ def update_status(task_id):
     new_status = request.form.get("status") or _request_json().get("status")
     if new_status == "in_progress":
         task_svc.move_to_in_progress(conn, task_id)
-    elif new_status == "pipeline":
+    elif new_status in ("active", "pipeline"):
         task_svc.move_to_pipeline(conn, task_id)
     elif new_status == "done":
         task = task_svc.get_task(conn, task_id)
@@ -515,9 +502,11 @@ def update_status(task_id):
 @login_required
 def reopen_task(task_id):
     conn = get_db()
-    to_status = request.form.get("to_status") or _request_json().get("to_status") or "pipeline"
-    if to_status not in ("pipeline", "in_progress"):
-        to_status = "pipeline"
+    to_status = request.form.get("to_status") or _request_json().get("to_status") or "active"
+    if to_status == "pipeline":
+        to_status = "active"
+    if to_status not in ("active", "in_progress"):
+        to_status = "active"
     try:
         task_svc.reopen_task(conn, task_id, to_status=to_status)
     except ValueError as exc:

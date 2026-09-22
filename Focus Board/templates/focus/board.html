@@ -134,7 +134,6 @@
     <label class="v2-quick-field v2-quick-check"><span class="quick-field-label">Recurring</span><span class="v2-checkbox"><input type="checkbox" name="is_recurring" id="qa-recurring-toggle"> Yes</span></label>
     <button type="submit" class="btn-primary v2-quick-submit">+ Add</button>
   </div>
-  <input type="hidden" name="activate" id="qa-activate" value="">
   <p class="form-hint qa-recurring-hint" id="qa-recurring-hint" style="display:none">
     Recurring items are templates in the <strong>Recurring templates</strong> section below. Choose a recurring template as parent — not an active task.
   </p>
@@ -231,6 +230,7 @@
     {% endif %}
     {% if task.get('subtask_total', 0) > 0 %}<span class="atile-steps" title="Subtasks">{{ task['subtask_total'] }} steps</span>{% endif %}
     {% if task.get('due_date') %}<span class="atile-due">{{ task['due_date'] }}</span>{% endif %}
+    {% if task.get('waiting_on') %}<span class="chip chip-wait tile-chip">waiting: {{ task['waiting_on'] }}</span>{% endif %}
     {% if show_edit %}
     <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}" class="atile-more" title="Edit task" aria-label="Edit task">⋮</a>
     {% endif %}
@@ -322,36 +322,6 @@
   </div>
 
 </div>
-
-{# ── PIPELINE ────────────────────────────────────────────────────────────── #}
-<details class="prod-section">
-  <summary class="prod-section-title">Pipeline <span class="count-badge plain-count">{{ pipeline|length }}</span></summary>
-  <p class="form-hint" style="margin:0 0 10px">Future and waiting-on work — activate an item when it is ready.</p>
-  <div class="recurring-list pipeline-template-list" id="pipeline-list">
-    {% for task in pipeline %}
-    <div class="recurring-tree pipeline-item" data-task-id="{{ task['id'] }}" data-task-title="{{ task['title']|e }}" data-task-type="{{ task.get('task_type') or 'adhoc' }}">
-      <div class="recurring-root pipeline-root">
-        <span class="drag-handle" title="Drag to Active">&#8286;</span>
-        <span class="recurring-title task-title">{{ task['title'] }}</span>
-        <span class="pipeline-chips">
-          {{ cat_dot(task) }}
-          {{ markers(task) }}
-          {{ effort_chip(task) }}
-          {{ type_tag(task) }}
-          {% if task.get('due_date') %}<span class="chip chip-due">{{ task['due_date'] }}</span>{% endif %}
-          {% if task.get('waiting_on') %}<span class="chip chip-wait">waiting: {{ task['waiting_on'] }}</span>{% endif %}
-          {% if task.get('subtask_total', 0) > 0 %}<span class="chip">{{ task['subtask_total'] }} steps</span>{% endif %}
-        </span>
-        <span class="pipeline-actions">
-          <button type="button" class="btn-start btn-sm js-to-active" data-task-id="{{ task['id'] }}">Activate</button>
-          <a href="{{ url_for('focus.edit_task', task_id=task['id']) }}" class="atile-more" title="Edit task" aria-label="Edit task">⋮</a>
-        </span>
-      </div>
-    </div>
-    {% endfor %}
-    {% if not pipeline %}<p class="empty-hint">Pipeline is empty.</p>{% endif %}
-  </div>
-</details>
 
 {# ── PROJECT MANAGEMENT ──────────────────────────────────────────────────── #}
 <details class="prod-section">
@@ -483,9 +453,7 @@ function openAddModal(mode, opts) {
   opts = opts || {};
   setAddMode(mode || 'task');
   const projectSel = document.getElementById('qa-project-id');
-  const activate = document.getElementById('qa-activate');
   if (projectSel) projectSel.value = opts.projectId ? String(opts.projectId) : '';
-  if (activate) activate.value = opts.activate ? '1' : '';
   const title = document.getElementById('v2-add-title');
   if (title && opts.projectName && (mode || 'task') === 'task') {
     title.textContent = 'Add task · ' + opts.projectName;
@@ -499,16 +467,13 @@ function openAddModal(mode, opts) {
 function openAddForProject(btn) {
   openAddModal('task', {
     projectId: btn.dataset.projectId,
-    projectName: btn.dataset.projectName,
-    activate: true
+    projectName: btn.dataset.projectName
   });
 }
 function closeAddModal(evt) {
   const modal = document.getElementById('add-task-modal');
   if (!modal || (evt && evt.target !== modal)) return;
   modal.style.display = 'none';
-  const activate = document.getElementById('qa-activate');
-  if (activate) activate.value = '';
 }
 document.querySelectorAll('.v2-add-tab').forEach(function(tab) {
   tab.addEventListener('click', function() { setAddMode(this.dataset.addMode); });
@@ -627,7 +592,7 @@ if (searchInput) {
   searchInput.addEventListener('input', function() {
     const q = this.value.toLowerCase().trim();
     document.querySelectorAll('.col-more').forEach(function(b) { b.style.display = q ? 'none' : ''; });
-    document.querySelectorAll('.task-tile, .pipeline-item, .kanban-card').forEach(function(el) {
+    document.querySelectorAll('.task-tile, .kanban-card').forEach(function(el) {
       if (!q) { el.style.display = el.dataset.collapsedHidden ? 'none' : ''; return; }
       const title = (el.dataset.taskTitle || '').toLowerCase();
       el.style.display = title.includes(q) ? '' : 'none';
@@ -660,10 +625,6 @@ function persistOrder(listEl) {
   const order = [...listEl.children].map(function(el) { return parseInt(el.dataset.taskId, 10); }).filter(function(n) { return !isNaN(n); });
   return postJson('/focus/tasks/reorder', { order: order });
 }
-document.querySelectorAll('.js-to-active').forEach(function(btn) {
-  btn.addEventListener('click', function() { moveBand(this.dataset.taskId, 'active').then(function(){ location.reload(); }); });
-});
-
 // ── Drag & drop across bands ────────────────────────────────────────────────
 const GROUP = 'focusv2';
 function taskTypeOf(el) { return (el && el.dataset.taskType) || 'adhoc'; }
@@ -709,10 +670,6 @@ document.querySelectorAll('.active-list-proj').forEach(function(listEl) {
     onAdd: function(evt) { moveBand(evt.item.dataset.taskId, 'active', 'project').then(function(){ location.reload(); }); },
     onUpdate: function(evt) { persistOrder(evt.to); }
   });
-});
-makeSortable(document.getElementById('pipeline-list'), {
-  onAdd: function(evt) { moveBand(evt.item.dataset.taskId, 'pipeline').then(function(){ location.reload(); }); },
-  onUpdate: function(evt) { persistOrder(evt.to); }
 });
 // Top-of-column drop strips for Project / Recurring (still accept same type only)
 ['active-project-drop', 'active-recurring-drop'].forEach(function(id) {

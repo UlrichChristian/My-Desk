@@ -42,8 +42,8 @@ def fix_projects() -> None:
         if not existing:
             conn.execute(
                 """INSERT INTO tasks
-                   (title, status, important, urgent, placed, source, created_on, updated_on)
-                   VALUES (?, 'pipeline', 1, 0, 1, 'canvas_import', ?, ?)""",
+                   (title, status, important, urgent, source, created_on, updated_on)
+                   VALUES (?, 'active', 1, 0, 'canvas_import', ?, ?)""",
                 (name, now, now),
             )
 

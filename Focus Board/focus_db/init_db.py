@@ -30,10 +30,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     title        TEXT NOT NULL,
     description  TEXT,
-    status       TEXT DEFAULT 'pipeline',
+    status       TEXT DEFAULT 'active',
     important    INTEGER DEFAULT 0,
     urgent       INTEGER DEFAULT 0,
-    placed       INTEGER DEFAULT 0,
     size         TEXT DEFAULT 'medium',
     category_id  INTEGER REFERENCES categories(id),
     project_id   INTEGER REFERENCES projects(id),
@@ -121,11 +120,11 @@ _CANVAS_PROJECTS = [
 ]
 
 _BUCKET_MAP = {
-    "do":    {"placed": 1, "status": "pipeline", "important": 1, "urgent": 1},
-    "sched": {"placed": 1, "status": "pipeline", "important": 1, "urgent": 0},
-    "del":   {"placed": 1, "status": "pipeline", "important": 0, "urgent": 1},
-    "later": {"placed": 1, "status": "pipeline", "important": 0, "urgent": 0},
-    "done":  {"placed": 1, "status": "done",     "important": 0, "urgent": 0},
+    "do":    {"status": "active", "important": 1, "urgent": 1},
+    "sched": {"status": "active", "important": 1, "urgent": 0},
+    "del":   {"status": "active", "important": 0, "urgent": 1},
+    "later": {"status": "active", "important": 0, "urgent": 0},
+    "done":  {"status": "done",   "important": 0, "urgent": 0},
 }
 
 
@@ -175,6 +174,10 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN sort_order INTEGER DEFAULT 0")
     if "completion_pct" not in proj_cols:
         conn.execute("ALTER TABLE projects ADD COLUMN completion_pct INTEGER DEFAULT 0")
+
+    conn.execute("UPDATE tasks SET status = 'active' WHERE status = 'pipeline'")
+    if "placed" in task_cols:
+        conn.execute("ALTER TABLE tasks DROP COLUMN placed")
 
     _backfill_category_colors(conn)
     conn.commit()
@@ -242,19 +245,18 @@ def _migrate_canvas(conn: sqlite3.Connection) -> None:
         )
     # Migrate tasks
     for i, t in enumerate(_CANVAS_TASKS):
-        mapping = _BUCKET_MAP.get(t["bucket"], {"placed": 0, "status": "pipeline", "important": 0, "urgent": 0})
+        mapping = _BUCKET_MAP.get(t["bucket"], {"status": "active", "important": 0, "urgent": 0})
         description = t["note"] if t["note"] else None
         completed_on = now if mapping["status"] == "done" else None
         conn.execute(
             """INSERT INTO tasks
-               (title, description, status, important, urgent, placed, sort_order,
+               (title, description, status, important, urgent, sort_order,
                 source, created_on, updated_on, completed_on)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'canvas_import', ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, 'canvas_import', ?, ?, ?)""",
             (
                 t["title"], description,
                 mapping["status"], mapping["important"], mapping["urgent"],
-                mapping["placed"], i,
-                now, now, completed_on,
+                i, now, now, completed_on,
             ),
         )
     conn.commit()

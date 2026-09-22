@@ -25,28 +25,6 @@ def _task_select() -> str:
               LEFT JOIN tasks parent ON parent.id = t.parent_id"""
 
 
-def list_unplaced(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Pipeline list — unplaced tasks without a project or recurring flag."""
-    return conn.execute(
-        f"""{_task_select()}
-           WHERE t.placed = 0 AND t.status = 'pipeline'
-             AND t.project_id IS NULL
-             {_active_filter()}
-           ORDER BY t.sort_order, t.id""",
-    ).fetchall()
-
-
-def list_unplaced_by_project(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Backlog tasks filed under a project (placed=0, status=pipeline)."""
-    return conn.execute(
-        f"""{_task_select()}
-           WHERE t.placed = 0 AND t.status = 'pipeline'
-             AND t.project_id IS NOT NULL
-             {_active_filter()}
-           ORDER BY t.project_id, t.sort_order, t.id""",
-    ).fetchall()
-
-
 _TASK_TYPES = ("adhoc", "recurring", "project")
 
 
@@ -80,29 +58,25 @@ def resolve_task_type(row: sqlite3.Row, *, ignore_override: bool = False) -> str
 def set_task_band(
     conn: sqlite3.Connection, task_id: int, *, band: str, target_type: str | None = None
 ) -> None:
-    """v2 lifecycle move. Bands: 'today' | 'active' | 'pipeline'.
+    """v2 lifecycle move. Bands: 'today' | 'active' (pipeline is an alias for active).
 
     - today    → status='in_progress' (the committed day list)
-    - active   → status='pipeline', placed=1; optional target_type sets a
-                 type_override, but only when it differs from the natural type
+    - active   → status='active'; optional target_type sets a type_override,
+                 but only when it differs from the natural type
                  (else the override is cleared to keep data clean)
-    - pipeline → status='pipeline', placed=0 (future / waiting)
 
     Never mutates important/urgent — those are explicit flags in v2.
     """
     now = _iso_now()
+    if band == "pipeline":
+        band = "active"
     if band == "today":
         conn.execute(
-            "UPDATE tasks SET status='in_progress', placed=1, updated_on=? WHERE id=?",
-            (now, task_id),
-        )
-    elif band == "pipeline":
-        conn.execute(
-            "UPDATE tasks SET status='pipeline', placed=0, updated_on=? WHERE id=?",
+            "UPDATE tasks SET status='in_progress', updated_on=? WHERE id=?",
             (now, task_id),
         )
     elif band == "active":
-        sets = ["status='pipeline'", "placed=1", "updated_on=?"]
+        sets = ["status='active'", "updated_on=?"]
         params: list = [now]
         if target_type in _TASK_TYPES:
             row = get_task(conn, task_id)
@@ -117,14 +91,14 @@ def set_task_band(
 
 
 def list_active_by_type(conn: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
-    """Active band (v2): placed tasks not yet started, grouped by resolved type.
+    """Active band: not-started tasks grouped by resolved type.
 
-    Uses placed=1 and status='pipeline', bucketed by task type. Project rows are
-    ordered by project so the render can group them under project headers.
+    Uses status='active', bucketed by task type. Project rows are ordered by
+    project so the render can group them under project headers.
     """
     rows = conn.execute(
         f"""{_task_select()}
-           WHERE t.placed = 1 AND t.status = 'pipeline'
+           WHERE t.status = 'active'
              {_active_filter()}
            ORDER BY t.project_id, t.sort_order, t.id""",
     ).fetchall()
@@ -283,20 +257,15 @@ def placement_from_recurring_root(
     *,
     important: int,
     urgent: int,
-    placed: int,
-) -> tuple[int, int, int]:
-    """Default important/urgent/placed from a recurring template root."""
+) -> tuple[int, int]:
+    """Default important/urgent from a recurring template root."""
     root = get_task(conn, root_id)
     if not root or not root["is_recurring"]:
-        return important, urgent, placed
+        return important, urgent
     if not important and not urgent:
         important = root["important"]
         urgent = root["urgent"]
-    if important or urgent:
-        placed = 1
-    elif not placed:
-        placed = root["placed"]
-    return important, urgent, placed
+    return important, urgent
 
 
 def list_parent_task_options(
@@ -476,7 +445,6 @@ def add_task(
     description: str | None = None,
     important: int = 0,
     urgent: int = 0,
-    placed: int = 0,
     size: str = "medium",
     category_id: int | None = None,
     project_id: int | None = None,
@@ -488,15 +456,15 @@ def add_task(
     pending_since: str | None = None,
 ) -> sqlite3.Row:
     now = _iso_now()
-    if pending_since is None and placed and not urgent:
+    if pending_since is None and not urgent:
         pending_since = now
     cur = conn.execute(
         """INSERT INTO tasks
-           (title, description, status, important, urgent, placed, size,
+           (title, description, status, important, urgent, size,
             category_id, project_id, parent_id, due_date, source, external_id,
             is_recurring, pending_since, created_on, updated_on)
-           VALUES (?, ?, 'pipeline', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (title, description, important, urgent, placed, size,
+           VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (title, description, important, urgent, size,
          category_id, project_id, parent_id, due_date, source, external_id,
          is_recurring, pending_since, now, now),
     )
@@ -519,7 +487,7 @@ def place_task(
         )
     conn.execute(
         """UPDATE tasks
-           SET placed=1, important=?, urgent=?, status='pipeline',
+           SET important=?, urgent=?, status='active',
                pending_since=?, updated_on=?
            WHERE id=?""",
         (important, urgent, pending_since, now, task_id),
@@ -529,7 +497,7 @@ def place_task(
 
 def move_to_in_progress(conn: sqlite3.Connection, task_id: int) -> None:
     conn.execute(
-        "UPDATE tasks SET status='in_progress', placed=1, updated_on=? WHERE id=?",
+        "UPDATE tasks SET status='in_progress', updated_on=? WHERE id=?",
         (_iso_now(), task_id),
     )
     conn.commit()
@@ -546,8 +514,9 @@ def complete_task(conn: sqlite3.Connection, task_id: int, enthusiasm: int | None
 
 
 def move_to_pipeline(conn: sqlite3.Connection, task_id: int) -> None:
+    """Send a task back to Active (not started, on the board)."""
     conn.execute(
-        "UPDATE tasks SET status='pipeline', updated_on=? WHERE id=?",
+        "UPDATE tasks SET status='active', updated_on=? WHERE id=?",
         (_iso_now(), task_id),
     )
     conn.commit()
@@ -563,19 +532,25 @@ def archive_task(conn: sqlite3.Connection, task_id: int) -> None:
 
 def unarchive_task(conn: sqlite3.Connection, task_id: int) -> None:
     conn.execute(
-        "UPDATE tasks SET status='pipeline', updated_on=? WHERE id=?",
+        "UPDATE tasks SET status='active', updated_on=? WHERE id=?",
         (_iso_now(), task_id),
     )
     conn.commit()
+
+
+def _normalize_not_started_status(to_status: str) -> str:
+    if to_status == "pipeline":
+        return "active"
+    return to_status
 
 
 def reopen_task(
     conn: sqlite3.Connection,
     task_id: int,
     *,
-    to_status: str = "pipeline",
+    to_status: str = "active",
 ) -> None:
-    """Move a completed task back to the active board."""
+    """Move a completed task back to the board (Active or Today)."""
     row = get_task(conn, task_id)
     if not row:
         raise ValueError("Task not found")
@@ -583,14 +558,14 @@ def reopen_task(
         raise ValueError("Only completed tasks can be reopened")
     if row["is_recurring"]:
         raise ValueError("Cannot reopen recurring template")
-    if to_status not in ("pipeline", "in_progress"):
-        raise ValueError("to_status must be 'pipeline' or 'in_progress'")
+    to_status = _normalize_not_started_status(to_status)
+    if to_status not in ("active", "in_progress"):
+        raise ValueError("to_status must be 'active' or 'in_progress'")
     now = _iso_now()
-    placed = 1 if to_status == "in_progress" else row["placed"]
     conn.execute(
-        """UPDATE tasks SET status=?, completed_on=NULL, placed=?, updated_on=?
+        """UPDATE tasks SET status=?, completed_on=NULL, updated_on=?
            WHERE id=?""",
-        (to_status, placed, now, task_id),
+        (to_status, now, task_id),
     )
     conn.commit()
 
@@ -639,17 +614,17 @@ def instantiate_recurring(conn: sqlite3.Connection, template_root_id: int) -> in
     now = _iso_now()
 
     def _clone_row(src: sqlite3.Row, *, parent_id: int | None, is_root: bool) -> int:
-        pending = now if src["placed"] and not src["urgent"] else None
+        pending = now if not src["urgent"] else None
         cur = conn.execute(
             """INSERT INTO tasks
-               (title, description, status, important, urgent, placed, size,
+               (title, description, status, important, urgent, size,
                 category_id, project_id, parent_id, due_date, source,
                 is_recurring, type_override, pending_since, created_on, updated_on)
-               VALUES (?, ?, 'pipeline', ?, ?, ?, ?, ?, ?, ?, ?, 'recurring',
+               VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, 'recurring',
                        0, 'recurring', ?, ?, ?)""",
             (
                 src["title"], src["description"],
-                src["important"], src["urgent"], src["placed"], src["size"],
+                src["important"], src["urgent"], src["size"],
                 src["category_id"], src["project_id"], parent_id, src["due_date"],
                 pending, now, now,
             ),
@@ -702,16 +677,12 @@ def create_recurring_template(
     source: str = "mcp",
 ) -> sqlite3.Row:
     """Create a new recurring template root (Recurring section on board)."""
-    placed = 1 if (important or urgent) else 0
-    if project_id and not important and not urgent:
-        placed = 0
     return add_task(
         conn,
         title=title,
         description=description,
         important=important,
         urgent=urgent,
-        placed=placed,
         size=size,
         category_id=category_id,
         project_id=project_id,
@@ -738,8 +709,8 @@ def add_recurring_subtask(
         raise ValueError("template_root_id must be a root recurring template.")
     imp = 0 if important is None else int(important)
     urg = 0 if urgent is None else int(urgent)
-    imp, urg, placed = placement_from_recurring_root(
-        conn, template_root_id, important=imp, urgent=urg, placed=0
+    imp, urg = placement_from_recurring_root(
+        conn, template_root_id, important=imp, urgent=urg
     )
     return add_task(
         conn,
@@ -747,7 +718,6 @@ def add_recurring_subtask(
         description=description,
         important=imp,
         urgent=urg,
-        placed=placed,
         size=size,
         category_id=root["category_id"],
         project_id=root["project_id"],
@@ -760,14 +730,8 @@ def add_recurring_subtask(
 
 def update_recurring_task(conn: sqlite3.Connection, task_id: int, **fields) -> None:
     """Patch a recurring template node (root or subtask)."""
-    row = _require_recurring(conn, task_id)
-    updates = dict(fields)
-    if "important" in updates or "urgent" in updates:
-        imp = updates.get("important", row["important"])
-        urg = updates.get("urgent", row["urgent"])
-        if "placed" not in updates:
-            updates["placed"] = 1 if (imp or urg) else 0
-    update_task(conn, task_id, **updates)
+    _require_recurring(conn, task_id)
+    update_task(conn, task_id, **fields)
 
 
 def list_categories(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -803,7 +767,7 @@ def _priority_eligible_sql(prefix: str = "") -> str:
     p = f"{prefix}." if prefix else ""
     return f"""{p}parent_id IS NULL
               AND COALESCE({p}is_recurring, 0) = 0
-              AND {p}status IN ('pipeline', 'in_progress')"""
+              AND {p}status IN ('active', 'in_progress')"""
 
 
 def list_priority_queue(conn: sqlite3.Connection) -> list[sqlite3.Row]:

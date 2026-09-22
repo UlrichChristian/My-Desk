@@ -66,7 +66,7 @@ def _find_duplicate_candidates(
                 "status": r["status"],
                 "similarity": round(ratio, 2),
                 "exact": exact,
-                "active": r["status"] in ("pipeline", "in_progress"),
+                "active": r["status"] in ("active", "in_progress", "pipeline"),
             })
     out.sort(key=lambda d: (d["exact"], d["similarity"]), reverse=True)
     return out[:limit]
@@ -78,7 +78,7 @@ def _blocking_duplicates(candidates: list[dict]) -> list[dict]:
 
 
 def _band_for_row(row: sqlite3.Row | dict) -> str:
-    """v2 lifecycle band: today | active | pipeline | completed | archived."""
+    """v2 lifecycle band: today | active | completed | archived."""
     status = row["status"]
     if status == "in_progress":
         return "today"
@@ -86,9 +86,7 @@ def _band_for_row(row: sqlite3.Row | dict) -> str:
         return "completed"
     if status == "archived":
         return "archived"
-    if row["placed"]:
-        return "active"
-    return "pipeline"
+    return "active"
 
 
 def _slim_task(row: sqlite3.Row | dict) -> dict:
@@ -107,7 +105,6 @@ def _slim_task(row: sqlite3.Row | dict) -> dict:
         "type": task_svc.resolve_task_type(row),
         "urgent": bool(row["urgent"]),
         "important": bool(row["important"]),
-        "placed": bool(row["placed"]),
         "due_date": row["due_date"],
         "waiting_on": waiting_on,
         "description": row["description"],
@@ -421,17 +418,17 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
 
     @mcp.tool()
     def list_tasks(status: str | None = None, placed: bool | None = None) -> list[dict]:
-        """List tasks. Ask user for filters if unclear. Use list_categories / list_projects for names."""
+        """List tasks. Ask user for filters if unclear. Use list_categories / list_projects for names.
+
+        status='pipeline' is accepted as an alias for 'active'. placed is ignored.
+        """
         clauses = ["COALESCE(t.is_recurring, 0) = 0", "t.status != 'archived'"]
         params: list[Any] = []
         if status:
+            if status == "pipeline":
+                status = "active"
             clauses.append("t.status = ?")
             params.append(status)
-        if placed is not None:
-            clauses.append("t.placed = ?")
-            params.append(1 if placed else 0)
-            if not placed:
-                clauses.append("t.project_id IS NULL")
         where = "WHERE " + " AND ".join(clauses)
         with open_db(focus_db_path) as conn:
             rows = conn.execute(
@@ -452,9 +449,9 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
     def list_active_board() -> dict:
         """Active work snapshot for the v2 board bands.
 
-        Returns today (in_progress), active (placed pipeline grouped by type:
-        adhoc / recurring / project), and pipeline (unplaced). Excludes
-        recurring templates, done, and archived.
+        Returns today (in_progress) and active (not-started tasks grouped by type:
+        adhoc / recurring / project). pipeline is always [] (legacy key).
+        Excludes recurring templates, done, and archived.
         """
         with open_db(focus_db_path) as conn:
             today = [_slim_task(r) for r in task_svc.list_in_progress(conn)]
@@ -463,13 +460,11 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                 key: [_slim_task(r) for r in rows]
                 for key, rows in by_type.items()
             }
-            pipeline = [_slim_task(r) for r in task_svc.list_unplaced(conn)]
-            pipeline += [_slim_task(r) for r in task_svc.list_unplaced_by_project(conn)]
             return {
                 "today": today,
                 "in_progress": today,  # alias for older callers
                 "active": active,
-                "pipeline": pipeline,
+                "pipeline": [],
             }
 
     @mcp.tool()
@@ -592,7 +587,6 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
         """
         imp = 1 if important else 0
         urg = 1 if urgent else 0
-        placed = 1 if (imp or urg) else 0
         with open_db(focus_db_path) as conn:
             duplicates = _find_duplicate_candidates(conn, title)
         preview = {
@@ -600,6 +594,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
             "description": description,
             "important": bool(imp),
             "urgent": bool(urg),
+            "quadrant": _quadrant_label(imp, urg),
             "size": size,
             "category": category,
             "create_category": create_category,
@@ -636,15 +631,12 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
             else:
                 category_id = _resolve_category_or_error(conn, category)
             project_id = _resolve_project_or_error(conn, project)
-            if project_id and not imp and not urg:
-                placed = 0
             row = task_svc.add_task(
                 conn,
                 title=title,
                 description=description,
                 important=imp,
                 urgent=urg,
-                placed=placed,
                 size=size,
                 category_id=category_id,
                 project_id=project_id,
@@ -695,7 +687,6 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                 description=description,
                 important=parent["important"],
                 urgent=parent["urgent"],
-                placed=parent["placed"],
                 size=size,
                 category_id=parent["category_id"],
                 project_id=parent["project_id"],
@@ -811,7 +802,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
         """Patch a task. description is high priority for email-sweep context. confirmed=True required to write.
 
         type_override ∈ adhoc|recurring|project|'' (empty string clears to derived).
-        waiting_on is a free-text label shown on Pipeline items.
+        waiting_on is a free-text label shown as a wait chip on Active tiles.
         """
         if type_override is not None and type_override not in ("", *_TASK_TYPES):
             raise ValueError(f"type_override must be one of {_TASK_TYPES} or ''.")
@@ -902,11 +893,12 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
         task_type: str | None = None,
         confirmed: bool = False,
     ) -> dict:
-        """Promote a pipeline task to Active (placed=1). confirmed=True required.
+        """Ensure a task is on Active (status=active). confirmed=True required.
 
-        Does NOT derive placement from important/urgent (v2). Pass important/urgent
-        only to set those flags. Optional task_type ∈ adhoc|recurring|project sets
-        a type_override when it differs from the natural type.
+        New tasks already land on Active — this is a no-op wrapper for older
+        callers. Pass important/urgent only to set those flags. Optional
+        task_type ∈ adhoc|recurring|project sets a type_override when it
+        differs from the natural type.
         """
         if task_type is not None and task_type not in _TASK_TYPES:
             raise ValueError(f"task_type must be one of {_TASK_TYPES}.")
@@ -936,7 +928,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
         task_type: str | None = None,
         confirmed: bool = False,
     ) -> dict:
-        """Promote Pipeline → Active (set placed=1). Alias for place_task without flags.
+        """Ensure a task is on Active. Alias for place_task without flags.
 
         Optional task_type ∈ adhoc|recurring|project. confirmed=True required.
         """
@@ -967,14 +959,17 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
     def reopen_task(
         task_id: int,
         confirmed: bool = False,
-        to_status: str = "pipeline",
+        to_status: str = "active",
     ) -> dict:
-        """Move a completed task back to the active board (pipeline or in_progress).
+        """Move a completed task back to the board (Active or Today).
 
-        Clears completed_on; keeps enthusiasm for history. confirmed=True required.
+        to_status='active' (or legacy 'pipeline') restores to Active.
+        to_status='in_progress' restores to Today. confirmed=True required.
         """
-        if to_status not in ("pipeline", "in_progress"):
-            raise ValueError("to_status must be 'pipeline' or 'in_progress'")
+        if to_status == "pipeline":
+            to_status = "active"
+        if to_status not in ("active", "in_progress"):
+            raise ValueError("to_status must be 'active' or 'in_progress'")
         preview = {"task_id": task_id, "to_status": to_status}
         blocked = _needs_confirm(confirmed, preview, "reopen_task")
         if blocked:
@@ -1002,8 +997,8 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
 
     @mcp.tool()
     def unarchive_task(task_id: int, confirmed: bool = False) -> dict:
-        """Restore archived task to pipeline. confirmed=True required."""
-        preview = {"task_id": task_id, "status": "pipeline"}
+        """Restore archived task to Active. confirmed=True required."""
+        preview = {"task_id": task_id, "status": "active", "band": "active"}
         blocked = _needs_confirm(confirmed, preview, "unarchive_task")
         if blocked:
             return blocked
@@ -1020,11 +1015,11 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
 
     @mcp.tool()
     def move_to_pipeline(task_id: int, confirmed: bool = False) -> dict:
-        """Move a task to Pipeline (status=pipeline, placed=0). confirmed=True required.
+        """Send a task off Today back to Active (status=active).
 
-        Stops the timer if this task is timing. Use for Active/Today → Pipeline demotion.
+        Stops the timer if this task is timing. confirmed=True required.
         """
-        preview = {"task_id": task_id, "band": "pipeline"}
+        preview = {"task_id": task_id, "band": "active"}
         blocked = _needs_confirm(confirmed, preview, "move_to_pipeline")
         if blocked:
             return blocked
@@ -1032,7 +1027,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
             active = timer_svc.get_active_entry(conn)
             if active and active["task_id"] == task_id:
                 timer_svc.stop_timer(conn)
-            task_svc.set_task_band(conn, task_id, band="pipeline")
+            task_svc.set_task_band(conn, task_id, band="active")
             return _slim_mutate(task_svc.get_task(conn, task_id))
 
     def _apply_move_to_in_progress(task_id: int) -> dict:
@@ -1055,7 +1050,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
     def move_to_in_progress(task_id: int, confirmed: bool = False) -> dict:
         """Move a task to Today (in_progress). confirmed=True required.
 
-        Use from Pipeline or Active before start_timer.
+        Use from Active before start_timer.
         """
         preview = {"task_id": task_id, "band": "today", "status": "in_progress"}
         blocked = _needs_confirm(confirmed, preview, "move_to_in_progress")
@@ -1203,16 +1198,12 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                 result.append({
                     "root_id": root["id"],
                     "root_title": root["title"],
-                    "quadrant": _quadrant_label(root["important"], root["urgent"])
-                    if root["placed"]
-                    else "pipeline",
+                    "quadrant": _quadrant_label(root["important"], root["urgent"]),
                     "subtasks": [
                         {
                             "id": s["id"],
                             "title": s["title"],
-                            "quadrant": _quadrant_label(s["important"], s["urgent"])
-                            if s["placed"]
-                            else "pipeline",
+                            "quadrant": _quadrant_label(s["important"], s["urgent"]),
                         }
                         for s in tmpl["subtasks"]
                     ],
@@ -1253,8 +1244,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
         """Create a recurring template root (Recurring section — not an active task).
 
         Set important/urgent as explicit flags on the template (and its clones).
-        In v2 these no longer control board placement — use promote_to_active / start_work.
-        confirmed=True required to write.
+        Start clones the tree onto Active Recurring. confirmed=True required to write.
         """
         imp = 1 if important else 0
         urg = 1 if urgent else 0
@@ -1493,7 +1483,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                     "title": t["title"],
                     "important": bool(imp),
                     "urgent": bool(urg),
-                    "quadrant": _quadrant_label(imp, urg) if (imp or urg) else "pipeline",
+                    "quadrant": _quadrant_label(imp, urg),
                     "size": t.get("size", "medium"),
                     "category": t.get("category"),
                     "project": t.get("project"),
@@ -1511,7 +1501,6 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
             for t in tasks:
                 imp = 1 if t.get("important") else 0
                 urg = 1 if t.get("urgent") else 0
-                placed = 1 if (imp or urg) else 0
                 dups = _find_duplicate_candidates(conn, t["title"])
                 if not allow_duplicate and _blocking_duplicates(dups):
                     skipped.append({"title": t["title"], "duplicates": dups})
@@ -1527,15 +1516,12 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                 else:
                     category_id = _resolve_category_or_error(conn, category)
                 project_id = _resolve_project_or_error(conn, t.get("project"))
-                if project_id and not imp and not urg:
-                    placed = 0
                 row = task_svc.add_task(
                     conn,
                     title=t["title"],
                     description=t.get("description"),
                     important=imp,
                     urgent=urg,
-                    placed=placed,
                     size=t.get("size", "medium"),
                     category_id=category_id,
                     project_id=project_id,
@@ -1560,11 +1546,13 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
     ) -> dict:
         """Move several tasks to the same status in one call. confirmed=True required.
 
-        status ∈ pipeline | in_progress | done | archived. For done/archived, an active
-        timer on an affected task is stopped first (mirrors complete_task/archive_task).
+        status ∈ active | pipeline (alias) | in_progress | done | archived.
+        For done/archived, an active timer on an affected task is stopped first.
         Per-task issues (not found, recurring, archived) are reported inline, not fatal.
         """
-        valid = {"pipeline", "in_progress", "done", "archived"}
+        if status == "pipeline":
+            status = "active"
+        valid = {"active", "in_progress", "done", "archived"}
         if status not in valid:
             raise ValueError(f"status must be one of {sorted(valid)}.")
         if not task_ids:
@@ -1597,7 +1585,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
                     active = timer_svc.get_active_entry(conn)
                     if active and active["task_id"] == task_id:
                         timer_svc.stop_timer(conn)
-                if status == "pipeline":
+                if status == "active":
                     task_svc.move_to_pipeline(conn, task_id)
                 elif status == "in_progress":
                     task_svc.move_to_in_progress(conn, task_id)
@@ -1618,7 +1606,7 @@ def register_focus_tools(mcp, *, focus_db_path: str, notes_dir: str, open_db) ->
         quadrant: str | None = None,
         confirmed: bool = False,
     ) -> dict:
-        """Promote several pipeline tasks to Active. confirmed=True required.
+        """Ensure several tasks are on Active. confirmed=True required.
 
         Optional task_type ∈ adhoc|recurring|project applied to each.
         Legacy `quadrant` (do/sched/del/later) is accepted but ignored for

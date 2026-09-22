@@ -16,14 +16,18 @@ Every automation mirrored in Process Street: to-do step + audit step.
 
 ## Task flow
 ```
-Quick-add → Pipeline (placed=0)
-         → Active (placed=1, grouped as To-do / Project / Recurring)
-         → Today (status=in_progress) → Completed
-Recurring templates live in their management section; Start clones a tree into Active.
+Quick-add / MCP add
+  → Recurring checkbox? → Recurring templates (Start clones into Active Recurring)
+  → Project selected?   → that project's Active group
+  → else                → Active To-do (Do Now / Schedule / Delegate / Later from flags)
+  → Today (status=in_progress) → Completed
 ```
 
+New tasks always land on the board (`status='active'`). There is no Pipeline
+holding area and no `placed` column. Unflagged ad-hoc tasks land in Later.
+
 ## Board section order (top → bottom)
-Compact timer/search/add bar · Today · Active · Pipeline · Projects management ·
+Compact timer/search/add bar · Today · Active · Projects management ·
 Recurring templates · Recently Completed
 
 ## Active layout
@@ -48,14 +52,13 @@ Recurring templates · Recently Completed
 - Visual: inner red inset ring (`.procrastinate`) stacks inside outer category frame when both set.
 
 ## Key schema notes
-- `placed=0` + `status='pipeline'` → Pipeline
-- `placed=1` + `status='pipeline'` → Active
+- `status='active'` → not started, on the Active board (To-do / Project / Recurring)
 - `status='in_progress'` → Today
 - `status='done'` → recently completed (reopen via board Reopen button or MCP `reopen_task`)
 - `status='archived'` → hidden from board (set via Edit → Archive task)
 - `is_recurring=1` → template only (Recurring section; excluded from active lists)
 - `type_override` → optional explicit `adhoc | recurring | project` classification
-- `waiting_on` → optional Pipeline dependency label
+- `waiting_on` → optional wait chip on Active tiles (edit-form field)
 - `important` / `urgent` → explicit task flags; for To-do they determine its subsection
 - `projects.completion_pct` → manual 0–100 progress shown beside project ⋮ menus
 - `size` column (shown as **Effort** in UI): Small / Med / Large — drives 1-3-5 rule counter
@@ -73,13 +76,14 @@ Recurring templates · Recently Completed
 ## Integrations (phases)
 - Phase 2: Workspace MCP server at `C:/Christian/mcp/server.py` — focus tools in `mcp/focus_mcp.py`
   - All mutating tools require `confirmed=True` unless user explicitly requested the change in the same turn (preview otherwise).
-  - Lifecycle: `archive_task`, `unarchive_task`, `list_archived_tasks`, `move_to_pipeline`, `reopen_task` (done → pipeline/in_progress).
+  - Lifecycle: `archive_task`, `unarchive_task`, `list_archived_tasks`, `move_to_pipeline` (Today → Active), `reopen_task` (done → Active or Today).
   - Task wording: `get_task_style_guide` + read-only `suggest_task_wording`; style note at `Knowledge App/notes/focus-task-style.md`.
   - Timer: `move_to_in_progress` (or `start_work`) → `start_timer` (cautious switch confirm) → `stop_timer`; `complete_task` stops active timer.
   - Categories: `add_category` (parent or sub); `add_task` / `update_task` accept `create_category=True` to create missing categories inline (parity with web quick-add).
   - Focus queue: `list_priority_queue`, `set_priority_queue`, `set_task_priority`, `reindex_task_priorities` (MCP-only `priority_index` on tasks).
   - Recurring templates: `get_recurring_template`, `add_recurring_template`, `add_recurring_subtask`, `update_recurring_task`, `list_recurring_templates`, `start_recurring` (clone to active board).
-  - Board reads: `list_active_board` (Today / Active / Pipeline), `search_tasks` (fuzzy title/description).
+  - Board reads: `list_active_board` (Today / Active; `pipeline` key is always [] for old callers), `search_tasks` (fuzzy title/description).
+  - Legacy aliases: `status='pipeline'` / `to_status='pipeline'` map to `active`. `move_to_pipeline` means Today → Active.
 - Phase 3: Process Street API (key in `.env`)
 - Email sweep: Claude chat + Outlook MCP + workspace MCP (no app button)
 
